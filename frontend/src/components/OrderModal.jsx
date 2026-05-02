@@ -205,7 +205,7 @@ export default function OrderModal({ open, onClose, order }) {
             <div className="space-y-2">
               {form.artists.map((a, i) => (
                 <div key={i} className="flex gap-2 items-center" data-testid={`artist-row-${i}`}>
-                  <span className="text-xs font-mono font-bold w-16 flex-shrink-0 px-2 py-1 rounded-full bg-[var(--ms-primary-soft)]" style={{ color: "var(--ms-primary)" }}>Artist {i + 1}</span>
+                  <span className="text-[0.68rem] font-mono font-bold flex-shrink-0 px-2.5 py-1 rounded-full bg-[var(--ms-primary-soft)] whitespace-nowrap" style={{ color: "var(--ms-primary)" }}>Artist&nbsp;{i + 1}</span>
                   <input className={inp + " flex-1"} placeholder="Nama artist" value={a} onChange={(e) => setArtist(i, e.target.value)} data-testid={`input-artist-${i}`} />
                   <select className={inp + " w-28 flex-shrink-0"} value={form.artist_statuses[i] || "Tim"} onChange={(e) => setArtistStatus(i, e.target.value)} data-testid={`select-artist-status-${i}`}>
                     {ARTIST_STATUS_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}

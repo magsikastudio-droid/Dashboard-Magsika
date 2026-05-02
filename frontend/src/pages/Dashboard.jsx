@@ -168,8 +168,8 @@ export default function Dashboard() {
         <StatCard testid="stat-total-project" icon={Dice5} label="Total Project" value={stats.total} sub={`${stats.done} selesai · ${stats.onProgress} aktif`} accent="#6d4cff" trend={trend(stats.total, prevStats.total)} />
         <StatCard testid="stat-total-value" icon={Gem} label="Total Equity" value={fmt(stats.totalValue, display)} sub={monthLabel(month)} accent="#3a8dff" trend={trend(stats.totalValue, prevStats.totalValue)} />
         <StatCard testid="stat-done" icon={CheckCircle2} label="Done / Selesai" value={fmt(stats.doneValue, display)} sub={`${stats.total ? Math.round((stats.done / stats.total) * 100) : 0}% completion`} accent="#16a34a" />
-        <StatCard testid="stat-net" icon={Hourglass} label="Net (— Fee)" value={fmt(stats.net, display)} sub={`Fee: ${fmt(stats.totalFee, display)}`} accent="#f59e0b" trend={trend(stats.net, prevStats.net)} />
-        <StatCard testid="stat-unpaid" icon={Wallet} label="Belum Dibayar" value={fmt(stats.unpaid, display)} sub="Outstanding" accent="#ef4444" />
+        <StatCard testid="stat-fee" icon={Hourglass} label="Fee Freelance" value={fmt(stats.totalFee, display)} sub={`Net: ${fmt(stats.net, display)}`} accent="#f59e0b" trend={trend(stats.net, prevStats.net)} />
+        <StatCard testid="stat-pending" icon={Wallet} label="Pending Payment" value={fmt(stats.unpaid, display)} sub="Outstanding" accent="#ef4444" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -181,22 +181,40 @@ export default function Dashboard() {
               </div>
               <h2 className="font-display text-2xl font-bold tracking-tight">Total per Klien</h2>
             </div>
+            <span className="text-[0.65rem] font-mono font-bold px-2 py-1 rounded-full bg-[var(--ms-bg)]">{perKlien.length} klien</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" data-testid="klien-grid">
-            {perKlien.length === 0 && <div className="text-sm text-[var(--ms-text-muted)] col-span-full text-center py-8">Belum ada order di bulan ini.</div>}
-            {perKlien.map(([klien, v]) => (
-              <div key={klien} className="bg-[var(--ms-bg)] rounded-2xl p-4 border border-[var(--ms-border)] card-hover transition-base" data-testid={`klien-card-${klien}`}>
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <h3 className="font-display text-base font-bold tracking-tight truncate">{klien}</h3>
-                  <span className="text-[0.65rem] font-bold font-mono px-2 py-0.5 rounded-full bg-white border border-[var(--ms-border)]">{v.count}</span>
+          <div className="space-y-2" data-testid="klien-list">
+            {perKlien.length === 0 && <div className="text-sm text-[var(--ms-text-muted)] text-center py-8">Belum ada order di bulan ini.</div>}
+            {perKlien.map(([klien, v]) => {
+              const pctDone = v.total ? Math.round((v.done / v.total) * 100) : 0;
+              return (
+                <div key={klien} className="bg-[var(--ms-bg)] rounded-xl p-3 border border-[var(--ms-border)] hover:border-[var(--ms-primary)] transition-base" data-testid={`klien-row-${klien}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center font-display font-bold text-sm flex-shrink-0" style={{ background: "var(--ms-primary-soft)", color: "var(--ms-primary)" }}>
+                      {klien[0]?.toUpperCase() || "?"}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <h3 className="font-display text-base font-bold tracking-tight truncate">{klien}</h3>
+                        <span className="text-[0.6rem] font-mono font-bold px-1.5 py-0 rounded-full bg-white border border-[var(--ms-border)] flex-shrink-0">{v.count} order</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="font-mono font-bold" style={{ color: "var(--ms-primary)" }}>{fmt(v.total, display)}</span>
+                        <span className="text-emerald-700 font-medium">✓ {fmt(v.done, display)} ({pctDone}%)</span>
+                      </div>
+                    </div>
+                    <button onClick={() => navigate(`/invoice?klien=${encodeURIComponent(klien)}&bulan=${month}`)} className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-white text-[0.68rem] font-semibold transition-base hover:opacity-90" style={{ background: "var(--ms-blue)" }} data-testid={`invoice-link-${klien}`}>
+                      Invoice <ArrowRight size={11} />
+                    </button>
+                  </div>
+                  {v.total > 0 && (
+                    <div className="mt-2 h-1 rounded-full bg-white overflow-hidden">
+                      <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pctDone}%` }} />
+                    </div>
+                  )}
                 </div>
-                <div className="font-display text-lg font-extrabold mb-1" style={{ color: "var(--ms-primary)" }}>{fmt(v.total, display)}</div>
-                <div className="text-xs text-emerald-700 font-medium mb-3">✓ Done: {fmt(v.done, display)}</div>
-                <button onClick={() => navigate(`/invoice?klien=${encodeURIComponent(klien)}&bulan=${month}`)} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-white text-[0.7rem] font-semibold transition-base hover:opacity-90" style={{ background: "var(--ms-blue)" }} data-testid={`invoice-link-${klien}`}>
-                  Invoice <ArrowRight size={11} />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

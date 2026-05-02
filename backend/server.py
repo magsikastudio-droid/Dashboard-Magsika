@@ -486,6 +486,103 @@ async def list_invoices(user: User = Depends(get_current_user)):
     docs = await db.invoices.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
     return docs
 
+# ---------- Weekly earnings (manual input) ----------
+class WeeklyInput(BaseModel):
+    targets: dict = {}  # { "magsika": 2000, "eirene": 2000 }
+    groups: dict = {}   # { "magsika": [{week:1, fiverr,etsy,...}], "eirene": [...], "lolicharm_komunitas": [...] }
+
+@api_router.get("/weekly/{yyyymm}")
+async def get_weekly(yyyymm: str, user: User = Depends(get_current_user)):
+    doc = await db.weekly_earnings.find_one({"_id": yyyymm})
+    if not doc:
+        return {"month": yyyymm, "targets": {"magsika": 2000, "eirene": 2000}, "groups": {"magsika": [], "eirene": [], "lolicharm_komunitas": []}}
+    doc.pop("_id", None)
+    doc["month"] = yyyymm
+    return doc
+
+@api_router.put("/weekly/{yyyymm}")
+async def put_weekly(yyyymm: str, payload: WeeklyInput, user: User = Depends(get_current_user)):
+    data = {"targets": payload.targets or {}, "groups": payload.groups or {}, "updated_at": datetime.now(timezone.utc).isoformat(), "updated_by": user.email}
+    await db.weekly_earnings.update_one({"_id": yyyymm}, {"$set": data}, upsert=True)
+    return {"month": yyyymm, **data}
+
+# ---------- Freelance artist profiles & project payment tracking ----------
+class FreelanceArtistInput(BaseModel):
+    name: str
+    bank: str = "BCA"
+    rekening: str = ""
+    phone: str = ""
+
+class FreelanceProjectInput(BaseModel):
+    artist_id: str
+    tanggal: str = ""
+    project: str = ""
+    pic: str = ""
+    status_project: str = "in_progress"  # "done" | "in_progress"
+    platform: str = ""
+    fee: float = 0
+    dp_amount: float = 0
+    dp_date: str = ""
+    pelunasan_date: str = ""
+    status_bayar: str = "unpaid"  # "paid" | "unpaid" | "dp_only"
+
+@api_router.get("/freelance/artists")
+async def list_freelance_artists(user: User = Depends(get_current_user)):
+    docs = await db.freelance_artists.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+    return docs
+
+@api_router.post("/freelance/artists")
+async def create_freelance_artist(payload: FreelanceArtistInput, user: User = Depends(get_current_user)):
+    doc = {"id": str(uuid.uuid4()), **payload.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.freelance_artists.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/freelance/artists/{artist_id}")
+async def update_freelance_artist(artist_id: str, payload: FreelanceArtistInput, user: User = Depends(get_current_user)):
+    res = await db.freelance_artists.update_one({"id": artist_id}, {"$set": payload.model_dump()})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Artist not found")
+    doc = await db.freelance_artists.find_one({"id": artist_id}, {"_id": 0})
+    return doc
+
+@api_router.delete("/freelance/artists/{artist_id}")
+async def delete_freelance_artist(artist_id: str, user: User = Depends(get_current_user)):
+    await db.freelance_artists.delete_one({"id": artist_id})
+    await db.freelance_projects.delete_many({"artist_id": artist_id})
+    return {"ok": True}
+
+@api_router.get("/freelance/projects")
+async def list_freelance_projects(user: User = Depends(get_current_user), artist_id: Optional[str] = None, month: Optional[str] = None):
+    q = {}
+    if artist_id:
+        q["artist_id"] = artist_id
+    docs = await db.freelance_projects.find(q, {"_id": 0}).sort("tanggal", -1).to_list(2000)
+    if month:
+        docs = [d for d in docs if (d.get("tanggal") or "")[:7] == month]
+    return docs
+
+@api_router.post("/freelance/projects")
+async def create_freelance_project(payload: FreelanceProjectInput, user: User = Depends(get_current_user)):
+    doc = {"id": str(uuid.uuid4()), **payload.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.freelance_projects.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/freelance/projects/{project_id}")
+async def update_freelance_project(project_id: str, payload: FreelanceProjectInput, user: User = Depends(get_current_user)):
+    res = await db.freelance_projects.update_one({"id": project_id}, {"$set": payload.model_dump()})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Project not found")
+    doc = await db.freelance_projects.find_one({"id": project_id}, {"_id": 0})
+    return doc
+
+@api_router.delete("/freelance/projects/{project_id}")
+async def delete_freelance_project(project_id: str, user: User = Depends(get_current_user)):
+    await db.freelance_projects.delete_one({"id": project_id})
+    return {"ok": True}
+
+
 # ---------- Settings ----------
 @api_router.get("/settings")
 async def get_settings(user: User = Depends(require_admin)):
