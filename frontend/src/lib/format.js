@@ -3,14 +3,6 @@ export const fmtRp = (n) => {
   return "Rp" + Number(n).toLocaleString("id-ID");
 };
 
-export const fmtRpShort = (n) => {
-  if (!n) return "Rp0";
-  if (n >= 1_000_000_000) return `Rp${(n / 1_000_000_000).toFixed(1)}M`;
-  if (n >= 1_000_000) return `Rp${(n / 1_000_000).toFixed(1)}jt`;
-  if (n >= 1_000) return `Rp${(n / 1_000).toFixed(0)}rb`;
-  return `Rp${n}`;
-};
-
 export const fmtDate = (iso) => {
   if (!iso) return "-";
   const d = new Date(iso);
@@ -21,15 +13,15 @@ export const fmtDate = (iso) => {
 };
 
 export const isLate = (deadlineIso, status) => {
-  if (status === "Done") return false;
   if (!deadlineIso) return false;
+  const s = (status || "").toLowerCase();
+  if (["done", "delivered", "cancel"].includes(s)) return false;
   return new Date(deadlineIso) < new Date(new Date().toDateString());
 };
 
 export const monthKey = (iso) => {
   if (!iso) return "";
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return iso.slice(0, 7); // YYYY-MM
 };
 
 export const monthLabel = (key) => {
@@ -37,4 +29,16 @@ export const monthLabel = (key) => {
   const [y, m] = key.split("-");
   const names = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
   return `${names[parseInt(m, 10) - 1]} ${y}`;
+};
+
+export const currentMonth = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+
+export const isArchived = (order) => {
+  // archived = status is done/delivered/cancel AND tanggal < current month
+  const s = (order.status || "").toLowerCase();
+  if (!["done", "delivered", "cancel"].includes(s)) return false;
+  return monthKey(order.tanggal) < currentMonth();
 };

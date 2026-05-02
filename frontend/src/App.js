@@ -13,36 +13,34 @@ import Orders from "@/pages/Orders";
 import Board from "@/pages/Board";
 import Invoice from "@/pages/Invoice";
 import Settings from "@/pages/Settings";
+import Earning from "@/pages/Earning";
+import Freelance from "@/pages/Freelance";
+import Archive from "@/pages/Archive";
+
+const gated = (Page) => (
+  <ProtectedRoute>
+    <OrdersProvider>
+      <Layout>
+        <Page />
+      </Layout>
+    </OrdersProvider>
+  </ProtectedRoute>
+);
 
 function AppRouter() {
   const location = useLocation();
-  // Synchronous check: if returning from OAuth, render AuthCallback first
-  if (location.hash?.includes("session_id=")) {
-    return <AuthCallback />;
-  }
+  if (location.hash?.includes("session_id=")) return <AuthCallback />;
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route
-        path="/dashboard"
-        element={<ProtectedRoute><OrdersProvider><Layout><Dashboard /></Layout></OrdersProvider></ProtectedRoute>}
-      />
-      <Route
-        path="/orders"
-        element={<ProtectedRoute><OrdersProvider><Layout><Orders /></Layout></OrdersProvider></ProtectedRoute>}
-      />
-      <Route
-        path="/board"
-        element={<ProtectedRoute><OrdersProvider><Layout><Board /></Layout></OrdersProvider></ProtectedRoute>}
-      />
-      <Route
-        path="/invoice"
-        element={<ProtectedRoute><OrdersProvider><Layout><Invoice /></Layout></OrdersProvider></ProtectedRoute>}
-      />
-      <Route
-        path="/settings"
-        element={<ProtectedRoute><OrdersProvider><Layout><Settings /></Layout></OrdersProvider></ProtectedRoute>}
-      />
+      <Route path="/dashboard" element={gated(Dashboard)} />
+      <Route path="/orders" element={gated(Orders)} />
+      <Route path="/board" element={gated(Board)} />
+      <Route path="/invoice" element={gated(Invoice)} />
+      <Route path="/earning" element={gated(Earning)} />
+      <Route path="/freelance" element={gated(Freelance)} />
+      <Route path="/archive" element={gated(Archive)} />
+      <Route path="/settings" element={gated(Settings)} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

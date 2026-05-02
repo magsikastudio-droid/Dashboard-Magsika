@@ -1,5 +1,4 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Depends
-from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -7,7 +6,7 @@ import os
 import logging
 import uuid
 import asyncio
-import json
+import re
 import requests
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
@@ -27,6 +26,31 @@ db = client[os.environ['DB_NAME']]
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# ---------- Platform Codes ----------
+PLATFORM_CODES = {
+    "Fiverr Magsika": "MGSIKA",
+    "Fiverr Eirene": "EIRENE",
+    "Etsy Lolicharm": "LLCHRM",
+    "Direct": "DIRECT",
+    "Komunitas": "LTK",
+}
+
+def sanitize_upper(s: str) -> str:
+    # keep alnum and spaces; remove special chars; uppercase; collapse spaces
+    s = re.sub(r"[^A-Za-z0-9 ]+", "", s or "").strip().upper()
+    return re.sub(r"\s+", " ", s)
+
+async def generate_folder_code(tanggal: str, platform: str, klien: str, project: str) -> str:
+    # tanggal: YYYY-MM-DD -> YYMMDD
+    date_compact = tanggal.replace("-", "")[2:] if tanggal else "000000"
+    code = PLATFORM_CODES.get(platform, "ETC")
+    # count existing orders same tanggal & platform
+    existing = await db.orders.count_documents({"tanggal": tanggal, "platform": platform})
+    seq = existing + 1
+    client_part = sanitize_upper(klien).replace(" ", "")
+    project_part = sanitize_upper(project)
+    return f"{date_compact}-{code}{seq:02d}-{client_part}-{project_part}"
+
 # ---------- Models ----------
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -34,21 +58,27 @@ class User(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
-    role: str = "member"  # "admin" or "member"
+    role: str = "member"
 
 class Order(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    tanggal: str  # ISO date YYYY-MM-DD
+    tanggal: str
     deadline: str
     klien: str
     project: str
-    jenis: str  # Modeling, Rigging, Animation, Texturing, Full Pipeline, Revisi
-    status: str  # Modeling, Rigging, Texturing, Rendering, Delivery, Done
+    jenis: str = "Modeling"
+    status: str = "modeling"
     artists: List[str] = []
     value: float = 0
     paid: bool = False
     catatan: str = ""
+    # New fields
+    platform: str = "Direct"
+    marketer: str = ""
+    order_id: str = ""       # manual
+    folder_code: str = ""    # auto
+    fee_freelance: float = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class OrderInput(BaseModel):
@@ -56,24 +86,28 @@ class OrderInput(BaseModel):
     deadline: str
     klien: str
     project: str
-    jenis: str
-    status: str = "Modeling"
+    jenis: str = "Modeling"
+    status: str = "modeling"
     artists: List[str] = []
     value: float = 0
     paid: bool = False
     catatan: str = ""
+    platform: str = "Direct"
+    marketer: str = ""
+    order_id: str = ""
+    fee_freelance: float = 0
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    allowed_emails: List[str] = []  # if empty + no admin, first login becomes admin
-    fonnte_token: str = ""
-    admin_wa: str = ""  # phone number for reminders, e.g. 6281234567890
+    allowed_emails: List[str] = []
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
     reminders_enabled: bool = True
 
 class SettingsInput(BaseModel):
     allowed_emails: List[str] = []
-    fonnte_token: str = ""
-    admin_wa: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
     reminders_enabled: bool = True
 
 class ReassignInput(BaseModel):
@@ -104,7 +138,12 @@ async def get_current_user(request: Request) -> User:
         raise HTTPException(status_code=401, detail="User not found")
     return User(**user_doc)
 
-# ---------- WebSocket Manager ----------
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+# ---------- WS Manager ----------
 class ConnectionManager:
     def __init__(self):
         self.active: Set[WebSocket] = set()
@@ -140,17 +179,12 @@ async def get_settings_doc() -> dict:
         doc = {
             "_id": "global",
             "allowed_emails": [],
-            "fonnte_token": "",
-            "admin_wa": "",
+            "telegram_bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+            "telegram_chat_id": os.environ.get("TELEGRAM_CHAT_ID", ""),
             "reminders_enabled": True,
         }
         await db.settings.insert_one(doc)
     return doc
-
-async def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    return user
 
 # ---------- Auth routes ----------
 @api_router.post("/auth/session")
@@ -171,14 +205,11 @@ async def auth_session(request: Request, response: Response):
         raise HTTPException(status_code=400, detail=f"Auth failed: {e}")
 
     email = data["email"].lower().strip()
-
-    # Whitelist check
     settings_doc = await get_settings_doc()
     allowed = [e.lower().strip() for e in settings_doc.get("allowed_emails", []) if e]
     has_admin = await db.users.find_one({"role": "admin"}, {"_id": 0})
 
     if not has_admin:
-        # Bootstrap: first ever login becomes admin
         role = "admin"
     elif allowed and email not in allowed and not await db.users.find_one({"email": email, "role": "admin"}, {"_id": 0}):
         raise HTTPException(status_code=403, detail=f"Email {email} tidak diizinkan. Hubungi admin untuk akses.")
@@ -188,7 +219,6 @@ async def auth_session(request: Request, response: Response):
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         user_id = existing["user_id"]
-        # Don't downgrade existing admins
         new_role = existing.get("role") or role
         await db.users.update_one({"user_id": user_id}, {"$set": {
             "name": data.get("name", existing.get("name")),
@@ -214,23 +244,8 @@ async def auth_session(request: Request, response: Response):
         "expires_at": expires_at.isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
-
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        path="/",
-        max_age=7 * 24 * 60 * 60,
-    )
-    return {
-        "user_id": user_id,
-        "email": email,
-        "name": data.get("name", ""),
-        "picture": data.get("picture", ""),
-        "role": (existing or {}).get("role") or role,
-    }
+    response.set_cookie(key="session_token", value=session_token, httponly=True, secure=True, samesite="none", path="/", max_age=7 * 24 * 60 * 60)
+    return {"user_id": user_id, "email": email, "name": data.get("name", ""), "picture": data.get("picture", ""), "role": (existing or {}).get("role") or role}
 
 @api_router.get("/auth/me", response_model=User)
 async def auth_me(user: User = Depends(get_current_user)):
@@ -247,42 +262,54 @@ async def auth_logout(request: Request, response: Response):
 # ---------- Orders CRUD ----------
 @api_router.get("/orders", response_model=List[Order])
 async def list_orders(user: User = Depends(get_current_user)):
-    docs = await db.orders.find({}, {"_id": 0}).sort("tanggal", 1).to_list(2000)
+    docs = await db.orders.find({}, {"_id": 0}).sort("tanggal", 1).to_list(5000)
     return [Order(**d) for d in docs]
 
 @api_router.post("/orders", response_model=Order)
 async def create_order(payload: OrderInput, user: User = Depends(get_current_user)):
-    order = Order(**payload.model_dump())
+    data = payload.model_dump()
+    # auto folder code
+    data["folder_code"] = await generate_folder_code(data["tanggal"], data["platform"], data["klien"], data["project"])
+    order = Order(**data)
     doc = order.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
     await db.orders.insert_one(doc)
     await manager.broadcast({"type": "order.created", "order": order.model_dump(mode="json")})
     return order
 
-@api_router.put("/orders/{order_id}", response_model=Order)
-async def update_order(order_id: str, payload: OrderInput, user: User = Depends(get_current_user)):
-    existing = await db.orders.find_one({"id": order_id}, {"_id": 0})
+@api_router.put("/orders/{order_id_uuid}", response_model=Order)
+async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Depends(get_current_user)):
+    existing = await db.orders.find_one({"id": order_id_uuid}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Order not found")
     update_data = payload.model_dump()
-    await db.orders.update_one({"id": order_id}, {"$set": update_data})
+    # regenerate folder code only if platform/tanggal/klien/project changed
+    if (existing.get("platform") != update_data.get("platform")
+        or existing.get("tanggal") != update_data.get("tanggal")
+        or existing.get("klien") != update_data.get("klien")
+        or existing.get("project") != update_data.get("project")):
+        # remove current order from count
+        await db.orders.update_one({"id": order_id_uuid}, {"$set": {"platform": "__tmp__"}})
+        update_data["folder_code"] = await generate_folder_code(update_data["tanggal"], update_data["platform"], update_data["klien"], update_data["project"])
+    else:
+        update_data["folder_code"] = existing.get("folder_code", "")
+    await db.orders.update_one({"id": order_id_uuid}, {"$set": update_data})
     merged = {**existing, **update_data}
     order = Order(**merged)
     await manager.broadcast({"type": "order.updated", "order": order.model_dump(mode="json")})
     return order
 
-@api_router.delete("/orders/{order_id}")
-async def delete_order(order_id: str, user: User = Depends(get_current_user)):
-    res = await db.orders.delete_one({"id": order_id})
+@api_router.delete("/orders/{order_id_uuid}")
+async def delete_order(order_id_uuid: str, user: User = Depends(get_current_user)):
+    res = await db.orders.delete_one({"id": order_id_uuid})
     if res.deleted_count == 0:
         raise HTTPException(404, "Order not found")
-    await manager.broadcast({"type": "order.deleted", "id": order_id})
+    await manager.broadcast({"type": "order.deleted", "id": order_id_uuid})
     return {"ok": True}
 
-@api_router.patch("/orders/{order_id}/reassign", response_model=Order)
-async def reassign_order(order_id: str, payload: ReassignInput, user: User = Depends(get_current_user)):
-    """Used by drag-and-drop on Board: change artists list or status."""
-    existing = await db.orders.find_one({"id": order_id}, {"_id": 0})
+@api_router.patch("/orders/{order_id_uuid}/reassign", response_model=Order)
+async def reassign_order(order_id_uuid: str, payload: ReassignInput, user: User = Depends(get_current_user)):
+    existing = await db.orders.find_one({"id": order_id_uuid}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Order not found")
     update = {}
@@ -291,11 +318,74 @@ async def reassign_order(order_id: str, payload: ReassignInput, user: User = Dep
     if payload.status is not None:
         update["status"] = payload.status
     if update:
-        await db.orders.update_one({"id": order_id}, {"$set": update})
+        await db.orders.update_one({"id": order_id_uuid}, {"$set": update})
         existing.update(update)
     order = Order(**existing)
     await manager.broadcast({"type": "order.updated", "order": order.model_dump(mode="json")})
     return order
+
+# ---------- Earning & Freelance aggregations ----------
+@api_router.get("/earnings")
+async def get_earnings(user: User = Depends(get_current_user)):
+    docs = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    by_month = {}
+    by_platform_month = {}
+    for o in docs:
+        month = (o.get("tanggal") or "")[:7]
+        if not month:
+            continue
+        val = float(o.get("value") or 0)
+        fee = float(o.get("fee_freelance") or 0)
+        plat = o.get("platform") or "Direct"
+        paid = bool(o.get("paid"))
+        m = by_month.setdefault(month, {"month": month, "gross": 0, "fee": 0, "net": 0, "paid": 0, "unpaid": 0, "count": 0})
+        m["gross"] += val
+        m["fee"] += fee
+        m["net"] = m["gross"] - m["fee"]
+        m["paid"] += val if paid else 0
+        m["unpaid"] += 0 if paid else val
+        m["count"] += 1
+
+        key = f"{month}::{plat}"
+        pm = by_platform_month.setdefault(key, {"month": month, "platform": plat, "gross": 0, "count": 0})
+        pm["gross"] += val
+        pm["count"] += 1
+    return {
+        "by_month": sorted(by_month.values(), key=lambda x: x["month"], reverse=True),
+        "by_platform_month": sorted(by_platform_month.values(), key=lambda x: (x["month"], x["platform"]), reverse=True),
+    }
+
+@api_router.get("/freelance")
+async def get_freelance(user: User = Depends(get_current_user)):
+    docs = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    by_artist = {}
+    rows = []
+    for o in docs:
+        fee = float(o.get("fee_freelance") or 0)
+        artists = [a for a in (o.get("artists") or []) if a]
+        month = (o.get("tanggal") or "")[:7]
+        if not artists or fee <= 0:
+            continue
+        per = fee / len(artists)
+        for a in artists:
+            ba = by_artist.setdefault(a, {"artist": a, "total_fee": 0, "count": 0, "by_month": {}})
+            ba["total_fee"] += per
+            ba["count"] += 1
+            ba["by_month"][month] = ba["by_month"].get(month, 0) + per
+            rows.append({
+                "order_id": o["id"],
+                "tanggal": o.get("tanggal"),
+                "artist": a,
+                "klien": o.get("klien"),
+                "project": o.get("project"),
+                "status": o.get("status"),
+                "fee_per_artist": per,
+                "folder_code": o.get("folder_code", ""),
+            })
+    return {
+        "by_artist": sorted(by_artist.values(), key=lambda x: x["total_fee"], reverse=True),
+        "rows": sorted(rows, key=lambda x: x["tanggal"] or "", reverse=True),
+    }
 
 # ---------- Settings ----------
 @api_router.get("/settings")
@@ -311,65 +401,71 @@ async def update_settings(payload: SettingsInput, user: User = Depends(require_a
     await db.settings.update_one({"_id": "global"}, {"$set": update}, upsert=True)
     return {**update}
 
+@api_router.post("/settings/test-telegram")
+async def test_telegram(user: User = Depends(require_admin)):
+    s = await get_settings_doc()
+    token = s.get("telegram_bot_token", "")
+    chat_id = s.get("telegram_chat_id", "")
+    if not token or not chat_id:
+        raise HTTPException(400, "Telegram belum dikonfigurasi")
+    ok = send_telegram(token, chat_id, "✅ *Magsika Studio*: Test reminder Telegram OK!")
+    if not ok:
+        raise HTTPException(400, "Gagal kirim pesan test")
+    return {"ok": True}
+
 @api_router.get("/users")
 async def list_users(user: User = Depends(require_admin)):
     docs = await db.users.find({}, {"_id": 0, "user_id": 1, "email": 1, "name": 1, "role": 1, "picture": 1}).to_list(500)
     return docs
 
-# ---------- WhatsApp Reminder via Fonnte ----------
+# ---------- Telegram Reminder ----------
 REMINDER_THRESHOLDS = [
     ("3d", timedelta(days=3)),
     ("2d", timedelta(days=2)),
     ("1d", timedelta(days=1)),
     ("6h", timedelta(hours=6)),
 ]
+DONE_STATUSES = {"done", "delivered", "cancel", "cancle"}
 
-def send_fonnte(token: str, target: str, message: str) -> bool:
-    if not token or not target:
+def send_telegram(token: str, chat_id: str, text: str) -> bool:
+    if not token or not chat_id:
         return False
     try:
         r = requests.post(
-            "https://api.fonnte.com/send",
-            headers={"Authorization": token},
-            data={"target": target, "message": message, "countryCode": "62"},
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
             timeout=15,
         )
         return r.status_code == 200
     except Exception as e:
-        logger.warning(f"Fonnte error: {e}")
+        logger.warning(f"Telegram error: {e}")
         return False
 
 async def reminder_loop():
-    """Background task: every 10 minutes, check upcoming deadlines and send WA reminders."""
     while True:
         try:
             settings_doc = await get_settings_doc()
             if not settings_doc.get("reminders_enabled", True):
-                await asyncio.sleep(600)
-                continue
-            token = settings_doc.get("fonnte_token", "")
-            target = settings_doc.get("admin_wa", "")
-            if not token or not target:
-                await asyncio.sleep(600)
-                continue
+                await asyncio.sleep(600); continue
+            token = settings_doc.get("telegram_bot_token", "")
+            chat_id = settings_doc.get("telegram_chat_id", "")
+            if not token or not chat_id:
+                await asyncio.sleep(600); continue
 
             now = datetime.now(timezone.utc)
-            orders_cursor = db.orders.find({"status": {"$ne": "Done"}}, {"_id": 0})
-            orders_list = await orders_cursor.to_list(2000)
+            orders_list = await db.orders.find({}, {"_id": 0}).to_list(5000)
 
             for o in orders_list:
+                if (o.get("status") or "").lower() in DONE_STATUSES:
+                    continue
                 try:
-                    deadline_dt = datetime.fromisoformat(o["deadline"]).replace(tzinfo=timezone.utc)
-                    # End-of-day for date-only deadline
-                    deadline_dt = deadline_dt.replace(hour=23, minute=59)
+                    deadline_dt = datetime.fromisoformat(o["deadline"]).replace(tzinfo=timezone.utc).replace(hour=23, minute=59)
                 except Exception:
                     continue
                 if deadline_dt < now:
-                    continue  # already late, skip
+                    continue
                 remaining = deadline_dt - now
-
                 for label, threshold in REMINDER_THRESHOLDS:
-                    # Fire if remaining is within +/- 30min of threshold
                     if abs((remaining - threshold).total_seconds()) > 1800:
                         continue
                     key = f"{o['id']}::{label}"
@@ -379,20 +475,20 @@ async def reminder_loop():
                     label_human = {"3d": "3 hari", "2d": "2 hari", "1d": "1 hari", "6h": "6 jam"}[label]
                     msg = (
                         f"⚠️ *Reminder Magsika Studio*\n\n"
-                        f"Project: *{o['project']}*\n"
-                        f"Klien: {o['klien']}\n"
-                        f"Artist: {', '.join(o.get('artists', [])) or '-'}\n"
-                        f"Deadline: {o['deadline']} (dalam *{label_human}*)\n"
-                        f"Status saat ini: {o['status']}\n\n"
-                        f"Segera selesaikan untuk menghindari delay 🙏"
+                        f"📦 *{o['project']}*\n"
+                        f"👤 Klien: {o['klien']}\n"
+                        f"🎨 Artist: {', '.join(o.get('artists', [])) or '-'}\n"
+                        f"📅 Deadline: `{o['deadline']}` (dalam *{label_human}*)\n"
+                        f"🏷️ Status: _{o.get('status')}_\n"
+                        f"📁 `{o.get('folder_code','')}`"
                     )
-                    ok = send_fonnte(token, target, msg)
+                    ok = send_telegram(token, chat_id, msg)
                     if ok:
                         await db.sent_reminders.insert_one({"_id": key, "sent_at": now.isoformat()})
-                        logger.info(f"WA reminder sent: {key}")
+                        logger.info(f"Telegram reminder sent: {key}")
         except Exception as e:
             logger.exception(f"reminder_loop error: {e}")
-        await asyncio.sleep(600)  # 10 min
+        await asyncio.sleep(600)
 
 # ---------- WebSocket ----------
 @app.websocket("/api/ws")
@@ -400,7 +496,6 @@ async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         while True:
-            # Keep alive — accept pings
             await ws.receive_text()
     except WebSocketDisconnect:
         await manager.disconnect(ws)
@@ -414,35 +509,40 @@ async def root():
 
 # ---------- Sample seed (idempotent) ----------
 SAMPLE_ORDERS = [
-    {"tanggal": "2026-04-01", "deadline": "2026-04-15", "klien": "Studio Animax", "project": "Character Ranger Full Body 3D", "jenis": "Full Pipeline", "status": "Done", "artists": ["Budi", "Sari"], "value": 3500000, "paid": True, "catatan": ""},
-    {"tanggal": "2026-04-03", "deadline": "2026-04-18", "klien": "VtuberCorp", "project": "Rigging Vtuber Sakura", "jenis": "Rigging", "status": "Done", "artists": ["Budi"], "value": 1800000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-05", "deadline": "2026-04-22", "klien": "NeoAnim", "project": "Animasi Cutscene Game", "jenis": "Animation", "status": "Rendering", "artists": ["Sari", "Joko"], "value": 5000000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-07", "deadline": "2026-04-20", "klien": "Studio Animax", "project": "Prop Modeling Sword Pack", "jenis": "Modeling", "status": "Texturing", "artists": ["Joko"], "value": 1200000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-08", "deadline": "2026-04-25", "klien": "VtuberCorp", "project": "Rigging Vtuber Luna", "jenis": "Rigging", "status": "Modeling", "artists": ["Budi", "Sari"], "value": 2000000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-10", "deadline": "2026-04-28", "klien": "PixelDream", "project": "Environment Kota Fantasi", "jenis": "Modeling", "status": "Modeling", "artists": ["Joko"], "value": 4500000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-12", "deadline": "2026-04-19", "klien": "NeoAnim", "project": "Revisi Cutscene Chapter 2", "jenis": "Revisi", "status": "Done", "artists": ["Sari"], "value": 500000, "paid": True, "catatan": ""},
-    {"tanggal": "2026-04-14", "deadline": "2026-04-30", "klien": "PixelDream", "project": "Character Villain 3D", "jenis": "Full Pipeline", "status": "Rigging", "artists": ["Budi", "Joko", "Sari"], "value": 6000000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-16", "deadline": "2026-04-26", "klien": "IndieGame", "project": "Creature Pack Slime", "jenis": "Modeling", "status": "Texturing", "artists": ["Joko"], "value": 900000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-18", "deadline": "2026-04-24", "klien": "Studio Animax", "project": "Texturing Karakter Ranger", "jenis": "Texturing", "status": "Done", "artists": ["Sari"], "value": 800000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-20", "deadline": "2026-04-28", "klien": "VtuberCorp", "project": "Toggle Outfit Sakura", "jenis": "Rigging", "status": "Delivery", "artists": ["Budi"], "value": 600000, "paid": False, "catatan": ""},
-    {"tanggal": "2026-04-22", "deadline": "2026-04-30", "klien": "IndieGame", "project": "UI Asset 3D Button Pack", "jenis": "Modeling", "status": "Modeling", "artists": ["Joko", "Sari"], "value": 1100000, "paid": False, "catatan": ""},
+    {"tanggal": "2026-04-01", "deadline": "2026-04-15", "klien": "Studio Animax", "project": "Character Ranger Full Body 3D", "jenis": "Full Pipeline", "status": "done", "artists": ["Budi", "Sari"], "value": 3500000, "paid": True, "platform": "Direct", "marketer": "Novita", "order_id": "A-001", "fee_freelance": 1200000},
+    {"tanggal": "2026-04-03", "deadline": "2026-04-18", "klien": "VtuberCorp", "project": "Rigging Vtuber Sakura", "jenis": "Rigging", "status": "done", "artists": ["Budi"], "value": 1800000, "paid": False, "platform": "Fiverr Magsika", "marketer": "Novita", "order_id": "FVR-8823", "fee_freelance": 600000},
+    {"tanggal": "2026-04-05", "deadline": "2026-04-22", "klien": "NeoAnim", "project": "Animasi Cutscene Game", "jenis": "Animation", "status": "rendering", "artists": ["Sari", "Joko"], "value": 5000000, "paid": False, "platform": "Direct", "marketer": "Ivo", "order_id": "A-002", "fee_freelance": 1800000},
+    {"tanggal": "2026-04-07", "deadline": "2026-04-20", "klien": "Studio Animax", "project": "Prop Modeling Sword Pack", "jenis": "Modeling", "status": "teksturing", "artists": ["Joko"], "value": 1200000, "paid": False, "platform": "Fiverr Magsika", "marketer": "Ivo", "order_id": "FVR-8901", "fee_freelance": 400000},
+    {"tanggal": "2026-04-08", "deadline": "2026-04-25", "klien": "VtuberCorp", "project": "Rigging Vtuber Luna", "jenis": "Rigging", "status": "modeling", "artists": ["Budi", "Sari"], "value": 2000000, "paid": False, "platform": "Fiverr Eirene", "marketer": "Novita", "order_id": "EIR-112", "fee_freelance": 700000},
+    {"tanggal": "2026-04-10", "deadline": "2026-04-28", "klien": "PixelDream", "project": "Environment Kota Fantasi", "jenis": "Modeling", "status": "modeling", "artists": ["Joko"], "value": 4500000, "paid": False, "platform": "Direct", "marketer": "Ivo", "order_id": "A-003", "fee_freelance": 1500000},
+    {"tanggal": "2026-04-12", "deadline": "2026-04-19", "klien": "NeoAnim", "project": "Revisi Cutscene Chapter 2", "jenis": "Revisi", "status": "revisi", "artists": ["Sari"], "value": 500000, "paid": True, "platform": "Direct", "marketer": "Novita", "order_id": "A-004", "fee_freelance": 200000},
+    {"tanggal": "2026-04-14", "deadline": "2026-04-30", "klien": "PixelDream", "project": "Character Villain 3D", "jenis": "Full Pipeline", "status": "rigging", "artists": ["Budi", "Joko", "Sari"], "value": 6000000, "paid": False, "platform": "Etsy Lolicharm", "marketer": "Novita", "order_id": "ETSY-55", "fee_freelance": 2100000},
+    {"tanggal": "2026-04-16", "deadline": "2026-04-26", "klien": "IndieGame", "project": "Creature Pack Slime", "jenis": "Modeling", "status": "teksturing", "artists": ["Joko"], "value": 900000, "paid": False, "platform": "Komunitas", "marketer": "Ivo", "order_id": "LTK-09", "fee_freelance": 300000},
+    {"tanggal": "2026-04-18", "deadline": "2026-04-24", "klien": "Studio Animax", "project": "Texturing Karakter Ranger", "jenis": "Texturing", "status": "done", "artists": ["Sari"], "value": 800000, "paid": False, "platform": "Direct", "marketer": "Novita", "order_id": "A-005", "fee_freelance": 280000},
+    {"tanggal": "2026-04-20", "deadline": "2026-04-28", "klien": "VtuberCorp", "project": "Toggle Outfit Sakura", "jenis": "Rigging", "status": "delivered", "artists": ["Budi"], "value": 600000, "paid": False, "platform": "Fiverr Magsika", "marketer": "Ivo", "order_id": "FVR-9005", "fee_freelance": 200000},
+    {"tanggal": "2026-04-22", "deadline": "2026-04-30", "klien": "IndieGame", "project": "UI Asset 3D Button Pack", "jenis": "Modeling", "status": "modeling", "artists": ["Joko", "Sari"], "value": 1100000, "paid": False, "platform": "Fiverr Magsika", "marketer": "Novita", "order_id": "FVR-9122", "fee_freelance": 380000},
 ]
 
 @app.on_event("startup")
-async def seed_sample():
+async def on_startup():
     count = await db.orders.count_documents({})
     if count == 0:
         for s in SAMPLE_ORDERS:
-            o = Order(**s)
+            fc = await generate_folder_code(s["tanggal"], s["platform"], s["klien"], s["project"])
+            o = Order(**{**s, "folder_code": fc})
             doc = o.model_dump()
             doc["created_at"] = doc["created_at"].isoformat()
             await db.orders.insert_one(doc)
         logger.info(f"Seeded {len(SAMPLE_ORDERS)} sample orders")
-    # backfill missing roles
+    # backfill missing fields on existing docs
+    await db.orders.update_many({"platform": {"$exists": False}}, {"$set": {"platform": "Direct", "marketer": "", "order_id": "", "folder_code": "", "fee_freelance": 0}})
     await db.users.update_many({"role": {"$exists": False}}, {"$set": {"role": "member"}})
-    # ensure settings exist
+    # regenerate missing folder codes
+    missing = await db.orders.find({"$or": [{"folder_code": ""}, {"folder_code": {"$exists": False}}]}, {"_id": 0}).to_list(2000)
+    for o in missing:
+        fc = await generate_folder_code(o.get("tanggal", ""), o.get("platform", "Direct"), o.get("klien", ""), o.get("project", ""))
+        await db.orders.update_one({"id": o["id"]}, {"$set": {"folder_code": fc}})
     await get_settings_doc()
-    # start reminder background task
     asyncio.create_task(reminder_loop())
     logger.info("Reminder loop started")
 

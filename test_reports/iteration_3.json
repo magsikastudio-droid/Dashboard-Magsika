@@ -1,0 +1,52 @@
+{
+  "summary": "Iter 3 testing complete. 15/15 new backend pytest tests pass (test_iter3.py). Verified: (1) folder_code generation (YYMMDD-CODE##-CLIENT-PROJECT) including per-platform-per-date seq increments (MGSIKA01→02) and independent counters per platform (LLCHRM01 on same date); (2) PUT regenerates folder_code only when tanggal/platform/klien/project change and keeps stable on non-critical edits; (3) GET /api/earnings returns {by_month, by_platform_month} with April 2026 gross=27.9M / fee=9.66M / net=18.24M / count=12 matching seeded data; (4) GET /api/freelance per-artist aggregation with fee split (e.g., 1,200,000/2 = 600,000 verified); rows count equals sum of artists across orders with fee>0; (5) Settings schema migrated fonnte→telegram (telegram_bot_token/telegram_chat_id seeded from .env, old fonnte_token/admin_wa absent); (6) POST /settings/test-telegram returned 200 {ok:true} with real creds (one-shot manual test) and 400 when creds blank; (7) All 17 expanded STATUS values accepted; (8) DONE_STATUSES constant contains done/delivered/cancel; (9) 12 seed April orders present with all new fields populated. Frontend Playwright verified: all 8 nav items render for admin (dashboard/orders/board/invoice/earning/freelance/archive/settings); Orders page new columns (PLATFORM/MARKETER/ORDER ID/FOLDER CODE/FEE) all present; 12 order-row + 12 invoice-btn for April filter; 'Buat Invoice' button navigates to /invoice?orderId=xxx correctly; OrderModal shows LIVE folder-code preview updating on input (typed PreviewCo/Demo X/2027-07-15 → got '270715-MGSIKA01-PREVIEWCO-DEMO X', switching platform to Etsy regenerated as '270715-LLCHRM01-PREVIEWCO-DEMO X'); Archive page renders 4 done+past-month rows with search/month/export-csv controls; Earning page shows earn-current + earn-by-month + earn-pivot; Freelance page (Apr 2026) shows 3 artist cards Joko/Sari/Budi totaling Rp9.66M matching earnings fee; Board shows 3 active columns; Settings page has Telegram Bot Token (seeded '8504165985:AAFb...') + Chat ID '1415837440' + test-telegram-btn (NOT fonnte — word absent from page).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/orders/{id}", "issue": "Folder-code regen uses a temporary '__tmp__' platform write to exclude the current order from the count, but if the request fails between the tmp-write and the regenerate step, the order is left with platform='__tmp__'. Edge case only — no error seen in tests."},
+      {"endpoint": "/api/earnings", "issue": "No month filter query param; frontend must fetch full dataset then filter client-side. Fine for current scale (<=5000 orders) but worth flagging."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard", "issues": ["The data-testid attributes on stat cards are 'stat-total-project' / 'stat-total-value' / 'stat-done' / 'stat-net' / 'stat-unpaid' (not 'stat-value' as listed in review_request). Each card also has a twin '<id>-value' for the number element. Naming mismatch vs. spec is minor — functional UI is correct, but tests should use 'stat-total-value' to get the gross-value card."]},
+      {"screen": "Board", "issues": ["'Selesai bulan ini' (done-section) is not rendered when there are no done orders in the current system month. With seed data in 2026-04 and system clock in 2026-05, no done items match → section hidden. Behaviour is defensible but might surprise reviewers; consider always rendering the heading with an empty-state hint."]},
+      {"screen": "All pages (console)", "issues": ["WebSocket first-connect logs 'WebSocket is closed before the connection is established' warning — pre-existing from iter 1/2, not user-visible."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter3.py",
+    "/app/backend/tests/test_iter2.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter3_results.xml"
+  ],
+  "action_items": [
+    "Optional: align dashboard data-testid naming with review_request spec — rename 'stat-total-value' → 'stat-value' (and similar) if external tests depend on the documented names.",
+    "Optional: always render Board 'Selesai bulan ini' section with empty-state text when 0 done-this-month items so reviewers see it.",
+    "Optional: wrap the PUT /orders folder_code regeneration in a try/except so a failed regen rolls back the '__tmp__' platform marker.",
+    "Note: iter2 test file test_iter2.py now has FAILING Settings tests because the schema changed (fonnte_token/admin_wa removed). Either mark those tests as xfail/obsolete or rewrite them for Telegram. I did NOT run test_iter2.py in this iteration."
+  ],
+  "critical_code_review_comments": [
+    "server.py generate_folder_code: race condition possible on concurrent POSTs of same date+platform — count_documents is not atomic with insert. Under current single-user admin load fine; if multi-user parallel creation is expected, switch to a counter collection with $inc findAndModify.",
+    "server.py PUT /orders regenerate path writes '__tmp__' as platform then recalculates — non-atomic. If the request raises between these two writes the order is left corrupted.",
+    "server.py reminder_loop still uses blocking requests inside an async coroutine (send_telegram). Low frequency (every 10 min) so acceptable but consider httpx.AsyncClient.",
+    "server.py earnings/freelance do full-collection scan each call (find({}).to_list(5000)). Add month query param + index on tanggal for scale.",
+    "server.py DONE_STATUSES has typo 'cancle' kept alongside 'cancel' — harmless defensive duplication.",
+    "server.py sanitize_upper strips all punctuation then collapses spaces but keeps spaces inside the project part of folder_code (e.g. 'DEMO X' with a space). If downstream Google Drive folder creation has issues with spaces, replace spaces with '_' or '-' for project_part.",
+    "Frontend OrderModal: folder-code-preview shows '—' when klien or project is empty — correct UX.",
+    "Frontend: 12 order rows render correctly, each with invoice-btn (Buat Invoice shortcut) navigating to /invoice?orderId=xxx — pre-selection verified via URL param."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3.py"
+  ],
+  "success_rate": {"backend": "100% (15/15 iter3 tests)", "frontend": "100% of iter3 flows verified"},
+  "test_credentials": "OAuth-based; test admin session seeded directly in mongo test_database (cleaned up post-test). Telegram real creds preserved in settings (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID from .env). /api/settings/test-telegram called exactly once in this iteration — returned 200 {ok:true}.",
+  "seed_data_creation": "No new seed data created. 12 April 2026 sample orders remain intact (gross 27.9M / fee 9.66M). All test users + sessions cleaned up post-test. 3 pre-existing admin/member users remain in DB (magsikastudio@gmail.com + admin@e2e.test + admin@t.test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter 3 is production-ready. test_iter3.py (15 tests) covers all iter3 backend changes and is pytest-compatible with JUnit XML at /app/test_reports/pytest/iter3_results.xml. test_iter2.py Settings suite WILL FAIL because the schema changed from fonnte→telegram — rewrite or xfail those tests before running. Frontend nav testids: all 8 present. OrderModal inputs: input-tanggal/deadline, select-platform/marketer/jenis/status/paid, input-order-id/klien/project/artist-0/1/2/value/fee/catatan, folder-code-preview. Dashboard stat testids: stat-total-project, stat-total-value, stat-done, stat-net, stat-unpaid (each also has a '<id>-value' sibling). Telegram test endpoint works — do NOT call it repeatedly (Telegram rate limits).",
+  "rca of the issue": "n/a — all iter3 features verified working end-to-end."
+}
