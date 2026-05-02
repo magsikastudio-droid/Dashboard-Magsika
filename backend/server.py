@@ -17,6 +17,9 @@ from datetime import datetime, timezone, timedelta
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
@@ -31,6 +34,7 @@ class User(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
+    role: str = "member"  # "admin" or "member"
 
 class Order(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -58,6 +62,23 @@ class OrderInput(BaseModel):
     value: float = 0
     paid: bool = False
     catatan: str = ""
+
+class Settings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    allowed_emails: List[str] = []  # if empty + no admin, first login becomes admin
+    fonnte_token: str = ""
+    admin_wa: str = ""  # phone number for reminders, e.g. 6281234567890
+    reminders_enabled: bool = True
+
+class SettingsInput(BaseModel):
+    allowed_emails: List[str] = []
+    fonnte_token: str = ""
+    admin_wa: str = ""
+    reminders_enabled: bool = True
+
+class ReassignInput(BaseModel):
+    artists: Optional[List[str]] = None
+    status: Optional[str] = None
 
 # ---------- Auth helpers ----------
 async def get_current_user(request: Request) -> User:
@@ -112,6 +133,25 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# ---------- Settings helpers ----------
+async def get_settings_doc() -> dict:
+    doc = await db.settings.find_one({"_id": "global"})
+    if not doc:
+        doc = {
+            "_id": "global",
+            "allowed_emails": [],
+            "fonnte_token": "",
+            "admin_wa": "",
+            "reminders_enabled": True,
+        }
+        await db.settings.insert_one(doc)
+    return doc
+
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
 # ---------- Auth routes ----------
 @api_router.post("/auth/session")
 async def auth_session(request: Request, response: Response):
@@ -130,13 +170,30 @@ async def auth_session(request: Request, response: Response):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Auth failed: {e}")
 
-    email = data["email"]
+    email = data["email"].lower().strip()
+
+    # Whitelist check
+    settings_doc = await get_settings_doc()
+    allowed = [e.lower().strip() for e in settings_doc.get("allowed_emails", []) if e]
+    has_admin = await db.users.find_one({"role": "admin"}, {"_id": 0})
+
+    if not has_admin:
+        # Bootstrap: first ever login becomes admin
+        role = "admin"
+    elif allowed and email not in allowed and not await db.users.find_one({"email": email, "role": "admin"}, {"_id": 0}):
+        raise HTTPException(status_code=403, detail=f"Email {email} tidak diizinkan. Hubungi admin untuk akses.")
+    else:
+        role = "member"
+
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         user_id = existing["user_id"]
+        # Don't downgrade existing admins
+        new_role = existing.get("role") or role
         await db.users.update_one({"user_id": user_id}, {"$set": {
             "name": data.get("name", existing.get("name")),
             "picture": data.get("picture", existing.get("picture")),
+            "role": new_role,
         }})
     else:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
@@ -145,6 +202,7 @@ async def auth_session(request: Request, response: Response):
             "email": email,
             "name": data.get("name", ""),
             "picture": data.get("picture", ""),
+            "role": role,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -171,6 +229,7 @@ async def auth_session(request: Request, response: Response):
         "email": email,
         "name": data.get("name", ""),
         "picture": data.get("picture", ""),
+        "role": (existing or {}).get("role") or role,
     }
 
 @api_router.get("/auth/me", response_model=User)
@@ -220,6 +279,121 @@ async def delete_order(order_id: str, user: User = Depends(get_current_user)):
     await manager.broadcast({"type": "order.deleted", "id": order_id})
     return {"ok": True}
 
+@api_router.patch("/orders/{order_id}/reassign", response_model=Order)
+async def reassign_order(order_id: str, payload: ReassignInput, user: User = Depends(get_current_user)):
+    """Used by drag-and-drop on Board: change artists list or status."""
+    existing = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Order not found")
+    update = {}
+    if payload.artists is not None:
+        update["artists"] = payload.artists
+    if payload.status is not None:
+        update["status"] = payload.status
+    if update:
+        await db.orders.update_one({"id": order_id}, {"$set": update})
+        existing.update(update)
+    order = Order(**existing)
+    await manager.broadcast({"type": "order.updated", "order": order.model_dump(mode="json")})
+    return order
+
+# ---------- Settings ----------
+@api_router.get("/settings")
+async def get_settings(user: User = Depends(require_admin)):
+    doc = await get_settings_doc()
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/settings")
+async def update_settings(payload: SettingsInput, user: User = Depends(require_admin)):
+    update = payload.model_dump()
+    update["allowed_emails"] = [e.lower().strip() for e in update.get("allowed_emails", []) if e and e.strip()]
+    await db.settings.update_one({"_id": "global"}, {"$set": update}, upsert=True)
+    return {**update}
+
+@api_router.get("/users")
+async def list_users(user: User = Depends(require_admin)):
+    docs = await db.users.find({}, {"_id": 0, "user_id": 1, "email": 1, "name": 1, "role": 1, "picture": 1}).to_list(500)
+    return docs
+
+# ---------- WhatsApp Reminder via Fonnte ----------
+REMINDER_THRESHOLDS = [
+    ("3d", timedelta(days=3)),
+    ("2d", timedelta(days=2)),
+    ("1d", timedelta(days=1)),
+    ("6h", timedelta(hours=6)),
+]
+
+def send_fonnte(token: str, target: str, message: str) -> bool:
+    if not token or not target:
+        return False
+    try:
+        r = requests.post(
+            "https://api.fonnte.com/send",
+            headers={"Authorization": token},
+            data={"target": target, "message": message, "countryCode": "62"},
+            timeout=15,
+        )
+        return r.status_code == 200
+    except Exception as e:
+        logger.warning(f"Fonnte error: {e}")
+        return False
+
+async def reminder_loop():
+    """Background task: every 10 minutes, check upcoming deadlines and send WA reminders."""
+    while True:
+        try:
+            settings_doc = await get_settings_doc()
+            if not settings_doc.get("reminders_enabled", True):
+                await asyncio.sleep(600)
+                continue
+            token = settings_doc.get("fonnte_token", "")
+            target = settings_doc.get("admin_wa", "")
+            if not token or not target:
+                await asyncio.sleep(600)
+                continue
+
+            now = datetime.now(timezone.utc)
+            orders_cursor = db.orders.find({"status": {"$ne": "Done"}}, {"_id": 0})
+            orders_list = await orders_cursor.to_list(2000)
+
+            for o in orders_list:
+                try:
+                    deadline_dt = datetime.fromisoformat(o["deadline"]).replace(tzinfo=timezone.utc)
+                    # End-of-day for date-only deadline
+                    deadline_dt = deadline_dt.replace(hour=23, minute=59)
+                except Exception:
+                    continue
+                if deadline_dt < now:
+                    continue  # already late, skip
+                remaining = deadline_dt - now
+
+                for label, threshold in REMINDER_THRESHOLDS:
+                    # Fire if remaining is within +/- 30min of threshold
+                    if abs((remaining - threshold).total_seconds()) > 1800:
+                        continue
+                    key = f"{o['id']}::{label}"
+                    sent = await db.sent_reminders.find_one({"_id": key})
+                    if sent:
+                        continue
+                    label_human = {"3d": "3 hari", "2d": "2 hari", "1d": "1 hari", "6h": "6 jam"}[label]
+                    msg = (
+                        f"⚠️ *Reminder Magsika Studio*\n\n"
+                        f"Project: *{o['project']}*\n"
+                        f"Klien: {o['klien']}\n"
+                        f"Artist: {', '.join(o.get('artists', [])) or '-'}\n"
+                        f"Deadline: {o['deadline']} (dalam *{label_human}*)\n"
+                        f"Status saat ini: {o['status']}\n\n"
+                        f"Segera selesaikan untuk menghindari delay 🙏"
+                    )
+                    ok = send_fonnte(token, target, msg)
+                    if ok:
+                        await db.sent_reminders.insert_one({"_id": key, "sent_at": now.isoformat()})
+                        logger.info(f"WA reminder sent: {key}")
+        except Exception as e:
+            logger.exception(f"reminder_loop error: {e}")
+        await asyncio.sleep(600)  # 10 min
+
 # ---------- WebSocket ----------
 @app.websocket("/api/ws")
 async def websocket_endpoint(ws: WebSocket):
@@ -264,6 +438,11 @@ async def seed_sample():
             doc["created_at"] = doc["created_at"].isoformat()
             await db.orders.insert_one(doc)
         logger.info(f"Seeded {len(SAMPLE_ORDERS)} sample orders")
+    # ensure settings exist
+    await get_settings_doc()
+    # start reminder background task
+    asyncio.create_task(reminder_loop())
+    logger.info("Reminder loop started")
 
 app.include_router(api_router)
 
@@ -274,9 +453,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

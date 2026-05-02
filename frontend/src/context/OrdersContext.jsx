@@ -73,9 +73,10 @@ export const OrdersProvider = ({ children }) => {
   const createOrder = async (payload) => (await api.post("/orders", payload)).data;
   const updateOrder = async (id, payload) => (await api.put(`/orders/${id}`, payload)).data;
   const deleteOrder = async (id) => (await api.delete(`/orders/${id}`)).data;
+  const reassignOrder = async (id, payload) => (await api.patch(`/orders/${id}/reassign`, payload)).data;
 
   return (
-    <OrdersContext.Provider value={{ orders, loading, wsConnected, fetchOrders, createOrder, updateOrder, deleteOrder }}>
+    <OrdersContext.Provider value={{ orders, loading, wsConnected, fetchOrders, createOrder, updateOrder, deleteOrder, reassignOrder }}>
       {children}
     </OrdersContext.Provider>
   );

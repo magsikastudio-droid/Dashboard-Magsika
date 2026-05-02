@@ -12,6 +12,7 @@ import Dashboard from "@/pages/Dashboard";
 import Orders from "@/pages/Orders";
 import Board from "@/pages/Board";
 import Invoice from "@/pages/Invoice";
+import Settings from "@/pages/Settings";
 
 function AppRouter() {
   const location = useLocation();
@@ -37,6 +38,10 @@ function AppRouter() {
       <Route
         path="/invoice"
         element={<ProtectedRoute><OrdersProvider><Layout><Invoice /></Layout></OrdersProvider></ProtectedRoute>}
+      />
+      <Route
+        path="/settings"
+        element={<ProtectedRoute><OrdersProvider><Layout><Settings /></Layout></OrdersProvider></ProtectedRoute>}
       />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

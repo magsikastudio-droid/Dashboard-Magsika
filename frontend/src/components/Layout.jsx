@@ -1,10 +1,10 @@
 import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, Wifi, WifiOff, Dice5 } from "lucide-react";
+import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, Wifi, WifiOff, Dice5, Settings as SettingsIcon } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useOrders } from "../context/OrdersContext";
 
-const navItems = [
+const baseNav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/orders", label: "Orders", icon: ClipboardList, testid: "nav-orders" },
   { to: "/board", label: "Board", icon: KanbanSquare, testid: "nav-board" },
@@ -15,6 +15,10 @@ export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const { wsConnected } = useOrders();
   const navigate = useNavigate();
+
+  const navItems = user?.role === "admin"
+    ? [...baseNav, { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" }]
+    : baseNav;
 
   return (
     <div className="min-h-screen" style={{ background: "var(--ms-bg)" }}>
