@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useMemo, useCallback } from "react";
-import { Palette, Plus, Copy, Phone, CreditCard, Pencil, Trash2, X, Check, Send, Calendar } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Palette, Plus, Copy, Phone, CreditCard, Pencil, Trash2, X, Send, Calendar, Search, Link2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useCurrency } from "../context/CurrencyContext";
+import { useOrders } from "../context/OrdersContext";
 import { monthLabel, currentMonth, fmtDate } from "../lib/format";
 import { toast } from "sonner";
 
@@ -271,9 +273,9 @@ function ArtistModal({ data, onClose, onSaved }) {
       onSaved();
     } catch { toast.error("Gagal"); } finally { setSaving(false); }
   };
-  return (
-    <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-md flex items-center justify-center p-4" onClick={onClose} data-testid="artist-modal">
-      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-md p-6 space-y-3">
+  const body = (
+    <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-md flex items-start justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="artist-modal">
+      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-md p-6 space-y-3 my-8">
         <div className="flex items-center justify-between">
           <h3 className="font-display text-xl font-bold">{data ? "Edit Artist" : "Tambah Artist"}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-[var(--ms-bg)]"><X size={16} /></button>
@@ -291,70 +293,169 @@ function ArtistModal({ data, onClose, onSaved }) {
       </div>
     </div>
   );
+  return createPortal(body, document.body);
 }
 
 function ProjectModal({ data, artistId, artists, onClose, onSaved }) {
-  const initial = data || { artist_id: artistId || "", tanggal: new Date().toISOString().slice(0, 10), project: "", pic: "", status_project: "in_progress", platform: "", fee: 0, dp_amount: 0, dp_date: "", pelunasan_date: "", status_bayar: "unpaid" };
+  const { orders } = useOrders();
+  const initial = data || { artist_id: artistId || "", tanggal: new Date().toISOString().slice(0, 10), project: "", pic: "", status_project: "in_progress", platform: "", fee: 0, dp_amount: 0, dp_date: "", pelunasan_date: "", status_bayar: "unpaid", order_ref_id: "" };
   const [f, setF] = useState(initial);
   const [saving, setSaving] = useState(false);
+  const [orderQ, setOrderQ] = useState("");
+  const [showOrderPicker, setShowOrderPicker] = useState(false);
+
+  const currentArtist = artists.find((a) => a.id === f.artist_id);
+
+  // Orders that have this artist flagged as Freelance
+  const artistOrders = useMemo(() => {
+    if (!currentArtist) return [];
+    const name = currentArtist.name.toLowerCase();
+    return orders.filter((o) => {
+      const list = o.artists || [];
+      const statuses = o.artist_statuses || [];
+      return list.some((an, i) => (an || "").toLowerCase() === name && (statuses[i] || "").toLowerCase() === "freelance");
+    });
+  }, [orders, currentArtist]);
+
+  const searchOrders = useMemo(() => {
+    if (!orderQ.trim()) return artistOrders.slice(0, 10);
+    const s = orderQ.toLowerCase();
+    return orders.filter((o) => `${o.project} ${o.klien} ${o.folder_code || ""} ${o.order_id || ""}`.toLowerCase().includes(s)).slice(0, 10);
+  }, [orderQ, artistOrders, orders]);
+
+  const pickOrder = (o) => {
+    // Auto-compute per-artist fee (fee_freelance / number of freelance artists)
+    const statuses = o.artist_statuses || [];
+    const names = o.artists || [];
+    const freelancers = names.filter((_, i) => (statuses[i] || "").toLowerCase() === "freelance");
+    const perArtistFee = freelancers.length > 0 ? (Number(o.fee_freelance) || 0) / freelancers.length : (Number(o.fee_freelance) || 0);
+    setF({ ...f,
+      order_ref_id: o.id,
+      project: o.project || "",
+      platform: o.platform || "",
+      pic: o.marketer || "",
+      tanggal: o.tanggal || f.tanggal,
+      status_project: ["done", "delivered"].includes((o.status || "").toLowerCase()) ? "done" : "in_progress",
+      fee: Math.round(perArtistFee),
+    });
+    setShowOrderPicker(false);
+    setOrderQ("");
+    toast.success("Data di-autofill dari order");
+  };
+
   const save = async () => {
     if (!f.project.trim()) { toast.error("Nama project wajib"); return; }
     setSaving(true);
     try {
-      if (data?.id) await api.put(`/freelance/projects/${data.id}`, f);
-      else await api.post("/freelance/projects", f);
+      const payload = { ...f };
+      delete payload.order_ref_id; // not stored in backend schema
+      if (data?.id) await api.put(`/freelance/projects/${data.id}`, payload);
+      else await api.post("/freelance/projects", payload);
       toast.success("Tersimpan");
       onSaved();
     } catch { toast.error("Gagal"); } finally { setSaving(false); }
   };
-  return (
+
+  const sectionH = "flex items-center gap-2 text-[0.72rem] uppercase tracking-wider font-bold pt-1 mb-3 pb-2 border-b border-[var(--ms-border)]";
+
+  const body = (
     <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-md flex items-start justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="project-modal">
-      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-3 my-6">
-        <div className="flex items-center justify-between">
+      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-lg my-6">
+        <div className="flex items-center justify-between px-6 pt-6 pb-3 border-b border-[var(--ms-border)]">
           <h3 className="font-display text-xl font-bold">{data ? "Edit Project" : "Tambah Project"}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-[var(--ms-bg)]"><X size={16} /></button>
         </div>
-        <Field label="Artist">
-          <select className={INP} value={f.artist_id} onChange={(e) => setF({ ...f, artist_id: e.target.value })} data-testid="proj-artist">
-            {artists.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="Tanggal"><input type="date" className={INP} value={f.tanggal} onChange={(e) => setF({ ...f, tanggal: e.target.value })} data-testid="proj-tanggal" /></Field>
-          <Field label="Platform"><input className={INP} value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} placeholder="Magsika / Eirene / ..." data-testid="proj-platform" /></Field>
+        <div className="p-6 space-y-5">
+          {/* INFO PROJECT */}
+          <div>
+            <div className={sectionH} style={{ color: "var(--ms-primary)" }}>📁 Info Project</div>
+            <div className="space-y-3">
+              <Field label="Artist">
+                <select className={INP} value={f.artist_id} onChange={(e) => setF({ ...f, artist_id: e.target.value, order_ref_id: "" })} data-testid="proj-artist">
+                  {artists.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </Field>
+
+              {/* Order picker (only when creating new) */}
+              {!data && (
+                <div className="bg-[var(--ms-bg)] rounded-xl p-3 border border-[var(--ms-border)]">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[0.68rem] uppercase tracking-wider font-bold font-mono flex items-center gap-1.5" style={{ color: "var(--ms-primary)" }}>
+                      <Link2 size={11} /> Link ke Order
+                    </div>
+                    <button onClick={() => setShowOrderPicker(!showOrderPicker)} className="text-[0.68rem] font-semibold hover:underline" style={{ color: "var(--ms-primary)" }} data-testid="toggle-order-picker">
+                      {showOrderPicker ? "Tutup" : `${artistOrders.length} order utk ${currentArtist?.name || "—"}`}
+                    </button>
+                  </div>
+                  {showOrderPicker && (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ms-text-muted)]" />
+                        <input value={orderQ} onChange={(e) => setOrderQ(e.target.value)} placeholder="Cari project / folder code..." className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-[var(--ms-border)] bg-white text-xs" data-testid="order-search-input" />
+                      </div>
+                      <div className="max-h-48 overflow-y-auto border border-[var(--ms-border)] rounded-lg bg-white" data-testid="order-picker-results">
+                        {searchOrders.length === 0 && <div className="text-center py-4 text-xs text-[var(--ms-text-muted)]">Tidak ada order cocok.</div>}
+                        {searchOrders.map((o) => (
+                          <button key={o.id} onClick={() => pickOrder(o)} className="w-full text-left p-2 hover:bg-[var(--ms-bg)] border-b border-[var(--ms-border)] last:border-0 transition-base" data-testid={`order-pick-${o.id}`}>
+                            <div className="font-semibold text-xs">{o.project}</div>
+                            <div className="text-[0.62rem] text-[var(--ms-text-muted)] font-mono truncate">{o.klien} · {o.platform} · {o.folder_code}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {f.order_ref_id && <div className="mt-2 text-[0.65rem] text-emerald-700 font-mono flex items-center gap-1"><Send size={10} /> Ter-link ke order · data ter-autofill</div>}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Tanggal"><input type="date" className={INP} value={f.tanggal} onChange={(e) => setF({ ...f, tanggal: e.target.value })} data-testid="proj-tanggal" /></Field>
+                <Field label="Platform"><input className={INP} value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} placeholder="Magsika / Eirene / ..." data-testid="proj-platform" /></Field>
+              </div>
+              <Field label="Nama Project"><input className={INP} value={f.project} onChange={(e) => setF({ ...f, project: e.target.value })} data-testid="proj-name" /></Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="PIC / Marketer"><input className={INP} value={f.pic} onChange={(e) => setF({ ...f, pic: e.target.value })} data-testid="proj-pic" /></Field>
+                <Field label="Status Project">
+                  <select className={INP} value={f.status_project} onChange={(e) => setF({ ...f, status_project: e.target.value })} data-testid="proj-status">
+                    <option value="in_progress">In progress</option>
+                    <option value="done">Done</option>
+                  </select>
+                </Field>
+              </div>
+              <Field label="Fee (Rp)"><input type="number" className={INP} value={f.fee} onChange={(e) => setF({ ...f, fee: Number(e.target.value) || 0 })} data-testid="proj-fee" /></Field>
+            </div>
+          </div>
+
+          {/* PEMBAYARAN */}
+          <div>
+            <div className={sectionH} style={{ color: "var(--ms-primary)" }}>💰 Pembayaran</div>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="DP (Rp)"><input type="number" className={INP} value={f.dp_amount} onChange={(e) => setF({ ...f, dp_amount: Number(e.target.value) || 0 })} data-testid="proj-dp" /></Field>
+                <Field label="Tanggal DP"><input type="date" className={INP} value={f.dp_date} onChange={(e) => setF({ ...f, dp_date: e.target.value })} /></Field>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Tanggal Pelunasan"><input type="date" className={INP} value={f.pelunasan_date} onChange={(e) => setF({ ...f, pelunasan_date: e.target.value })} /></Field>
+                <Field label="Status Bayar">
+                  <select className={INP} value={f.status_bayar} onChange={(e) => setF({ ...f, status_bayar: e.target.value })} data-testid="proj-status-bayar">
+                    <option value="unpaid">× Unpaid</option>
+                    <option value="dp_only">⧗ DP saja</option>
+                    <option value="paid">✓ Paid</option>
+                  </select>
+                </Field>
+              </div>
+            </div>
+          </div>
         </div>
-        <Field label="Nama Project"><input className={INP} value={f.project} onChange={(e) => setF({ ...f, project: e.target.value })} data-testid="proj-name" /></Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="PIC / Marketer"><input className={INP} value={f.pic} onChange={(e) => setF({ ...f, pic: e.target.value })} data-testid="proj-pic" /></Field>
-          <Field label="Status Project">
-            <select className={INP} value={f.status_project} onChange={(e) => setF({ ...f, status_project: e.target.value })} data-testid="proj-status">
-              <option value="in_progress">In progress</option>
-              <option value="done">Done</option>
-            </select>
-          </Field>
-        </div>
-        <Field label="Fee (Rp)"><input type="number" className={INP} value={f.fee} onChange={(e) => setF({ ...f, fee: Number(e.target.value) || 0 })} data-testid="proj-fee" /></Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="DP (Rp)"><input type="number" className={INP} value={f.dp_amount} onChange={(e) => setF({ ...f, dp_amount: Number(e.target.value) || 0 })} data-testid="proj-dp" /></Field>
-          <Field label="Tanggal DP"><input type="date" className={INP} value={f.dp_date} onChange={(e) => setF({ ...f, dp_date: e.target.value })} /></Field>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="Tanggal Pelunasan"><input type="date" className={INP} value={f.pelunasan_date} onChange={(e) => setF({ ...f, pelunasan_date: e.target.value })} /></Field>
-          <Field label="Status Bayar">
-            <select className={INP} value={f.status_bayar} onChange={(e) => setF({ ...f, status_bayar: e.target.value })} data-testid="proj-status-bayar">
-              <option value="unpaid">× Unpaid</option>
-              <option value="dp_only">⧗ DP saja</option>
-              <option value="paid">✓ Paid</option>
-            </select>
-          </Field>
-        </div>
-        <div className="flex justify-end gap-2 pt-2">
+
+        <div className="px-6 py-4 border-t border-[var(--ms-border)] flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 rounded-full border border-[var(--ms-border)] text-sm font-semibold">Batal</button>
           <button onClick={save} disabled={saving} className="px-4 py-2 rounded-full text-white text-sm font-semibold" style={{ background: "var(--ms-primary)" }} data-testid="save-project-btn">{saving ? "..." : "Simpan"}</button>
         </div>
       </div>
     </div>
   );
+  return createPortal(body, document.body);
 }
 
 const Field = ({ label, children }) => (

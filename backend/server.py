@@ -284,7 +284,55 @@ async def create_order(payload: OrderInput, user: User = Depends(get_current_use
     doc["created_at"] = doc["created_at"].isoformat()
     await db.orders.insert_one(doc)
     await manager.broadcast({"type": "order.created", "order": order.model_dump(mode="json")})
+    # Auto-create freelance artists for "Freelance" flagged artists
+    await _sync_freelance_artists(order)
+    # Auto-send Telegram "new order" notification
+    try:
+        s = await get_settings_doc()
+        token = s.get("telegram_bot_token", "")
+        chat_id = s.get("telegram_chat_id", "")
+        if token and chat_id:
+            msg = (
+                f"🆕 ORDER BARU MASUK\n\n"
+                f"📁 Project   : {order.project}\n"
+                f"👤 Client    : {order.klien}\n"
+                f"📂 Folder    : {order.folder_code}\n"
+                f"📅 Deadline  : {order.deadline}\n"
+                f"🚀 Silakan segera diproses."
+            )
+            send_telegram(token, chat_id, msg)
+    except Exception as e:
+        logger.warning(f"auto new-order telegram failed: {e}")
     return order
+
+async def _sync_freelance_artists(order: "Order"):
+    """For each artist flagged 'Freelance' in the order, ensure a freelance_artists record exists."""
+    try:
+        artists = order.artists or []
+        statuses = order.artist_statuses or []
+        for i, name in enumerate(artists):
+            if i >= len(statuses):
+                break
+            if (statuses[i] or "").lower() != "freelance":
+                continue
+            name = (name or "").strip()
+            if not name:
+                continue
+            existing = await db.freelance_artists.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}}, {"_id": 0})
+            if not existing:
+                new_doc = {
+                    "id": str(uuid.uuid4()),
+                    "name": name,
+                    "bank": "BCA",
+                    "rekening": "",
+                    "phone": "",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "auto_created": True,
+                }
+                await db.freelance_artists.insert_one(new_doc)
+                logger.info(f"Auto-created freelance artist: {name}")
+    except Exception as e:
+        logger.warning(f"freelance sync error: {e}")
 
 @api_router.put("/orders/{order_id_uuid}", response_model=Order)
 async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Depends(get_current_user)):
@@ -317,6 +365,7 @@ async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Dep
     merged = {**existing, **update_data}
     order = Order(**merged)
     await manager.broadcast({"type": "order.updated", "order": order.model_dump(mode="json")})
+    await _sync_freelance_artists(order)
     return order
 
 # ---------- Telegram notify per-order ----------
@@ -391,29 +440,37 @@ async def reassign_order(order_id_uuid: str, payload: ReassignInput, user: User 
 @api_router.get("/earnings")
 async def get_earnings(user: User = Depends(get_current_user)):
     docs = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    settings = await get_settings_doc()
+    rate = float(settings.get("exchange_rate") or 16000)
     by_month = {}
     by_platform_month = {}
     for o in docs:
         month = (o.get("tanggal") or "")[:7]
         if not month:
             continue
-        val = float(o.get("value") or 0)
-        fee = float(o.get("fee_freelance") or 0)
+        raw_val = float(o.get("value") or 0)
+        raw_fee = float(o.get("fee_freelance") or 0)
+        cur = (o.get("currency") or "USD").upper()
+        # Normalize to USD base
+        val_usd = raw_val if cur == "USD" else raw_val / rate
+        fee_usd = raw_fee / rate  # fee is always IDR
         plat = o.get("platform") or "Direct"
         paid = bool(o.get("paid"))
         m = by_month.setdefault(month, {"month": month, "gross": 0, "fee": 0, "net": 0, "paid": 0, "unpaid": 0, "count": 0})
-        m["gross"] += val
-        m["fee"] += fee
+        m["gross"] += val_usd
+        m["fee"] += fee_usd
         m["net"] = m["gross"] - m["fee"]
-        m["paid"] += val if paid else 0
-        m["unpaid"] += 0 if paid else val
+        m["paid"] += val_usd if paid else 0
+        m["unpaid"] += 0 if paid else val_usd
         m["count"] += 1
 
         key = f"{month}::{plat}"
         pm = by_platform_month.setdefault(key, {"month": month, "platform": plat, "gross": 0, "count": 0})
-        pm["gross"] += val
+        pm["gross"] += val_usd
         pm["count"] += 1
     return {
+        "base_currency": "USD",
+        "exchange_rate": rate,
         "by_month": sorted(by_month.values(), key=lambda x: x["month"], reverse=True),
         "by_platform_month": sorted(by_platform_month.values(), key=lambda x: (x["month"], x["platform"]), reverse=True),
     }

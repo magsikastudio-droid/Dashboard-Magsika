@@ -6,8 +6,8 @@ import { monthLabel, currentMonth } from "../lib/format";
 import { PLATFORM_COLORS, PLATFORM_OPTIONS } from "../lib/constants";
 import { toast } from "sonner";
 
-// Heuristic for legacy mixed-currency values.
-const guessCur = (n) => (Number(n) > 100000 ? "IDR" : "USD");
+// Backend returns all amounts normalized to USD base (see /api/earnings).
+// Fee is also in USD (converted from stored IDR using current exchange_rate).
 
 const PLATFORM_SHORT = { "Fiverr Magsika": "Magsika", "Fiverr Eirene": "Eirene", "Etsy Lolicharm": "Lolicharm", "Direct": "Direct", "Komunitas": "Komunitas" };
 const WEEKLY_COLS = ["fiverr", "etsy", "upwork", "vgen", "komunitas", "lain_lain"];
@@ -52,8 +52,8 @@ export default function Earning() {
     })();
   }, []);
 
-  const cv = (n) => convert(Number(n) || 0, guessCur(n));
-  const cvIdr = (n) => convert(Number(n) || 0, "IDR");
+  const cv = (n) => convert(Number(n) || 0, "USD");
+  const cvIdr = (n) => convert(Number(n) || 0, "USD"); // fee now USD-normalized
 
   const months = data.by_month;
   const bulanList = useMemo(() => { const s = new Set(months.map((m) => m.month)); s.add(currentMonth()); return Array.from(s).sort().reverse(); }, [months]);

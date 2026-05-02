@@ -1,0 +1,45 @@
+{
+  "summary": "Iter6 testing complete: 7/7 backend pytest pass + all key frontend flows verified. (1) BACKEND auto-freelance sync: POST /api/orders with artist_statuses=['Tim','Freelance'] auto-creates only the Freelance-flagged artist (verified via GET /api/freelance/artists). PUT /api/orders also triggers _sync_freelance_artists (added Freelance artist on update → record auto-created). (2) Telegram blanked via PUT /api/settings before tests, order create still 200, restored to -1003611845591 + token after. NO real Telegram API calls made. (3) /api/earnings returns {base_currency:'USD', exchange_rate:16000, by_month, by_platform_month}. Math verified for value=500 USD + fee_freelance=800000 IDR + rate=16000 → gross_delta=500, fee_delta=50, net_delta=450 (within 0.5 USD tolerance). (4) Regression: all 12 seeded orders + earnings show reasonable USD values; no astronomically negative net (assertion m['net'] > -1_000_000 passes for all months). (5) FRONTEND OrderModal: input-artist-0 has 'flex-1 min-w-0', select-artist-status-0 has 'w-24 flex-shrink-0'. fee-percent chip text='10.0% dari order' for value=500 USD/fee=800000 IDR (matches spec). (6) Freelance ProjectModal: opens via portal at z-[1000] full-screen backdrop-blur-md (verified by intercept-pointer-events on outer div). Both 'Info Project' and 'Pembayaran' section headers render. toggle-order-picker showed '1 order utk UITestArtistFree'. After clicking order-pick-<id>: project name auto-filled 'UITest Freelance Order', fee=800000, platform='Direct', tanggal=04/05/2026 — auto-fill verified. (7) Earning page: USD $445 gross / $40 fee / $405 net for May 2026, $2950/$50/$2900 Apr — reasonable values. Currency toggle USD→IDR formats correctly (Rp7.120.000 = $445 × 16000). Trend chart finite y-axis (200,000 IDR scale). Test data cleanup complete via mongosh.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/orders auto-telegram", "issue": "send_telegram is synchronous (requests.post with timeout=15) called inline inside create_order — blocks the API response by up to 15s if Telegram is slow. Should be moved to BackgroundTasks or asyncio.create_task to avoid blocking the order create response."},
+      {"endpoint": "_sync_freelance_artists", "issue": "Per-artist case-insensitive regex find; for orders with many artists this becomes O(N) sequential round-trips. Acceptable now (artists.length usually <5) but consider bulk find/insert for larger teams."},
+      {"endpoint": "GET /api/earnings", "issue": "exchange_rate is a single point-in-time value applied retroactively to ALL historical orders — older IDR orders are converted at TODAY's rate, not the rate at time of order. For accurate historical accounting, store the conversion rate snapshot per order."},
+      {"endpoint": "GET /api/earnings", "issue": "fee_freelance is hardcoded as IDR in the conversion (raw_fee/rate) regardless of any future fee currency support. If a USD-paid freelancer ever gets entered, the math will silently divide twice."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter6.py",
+    "/app/test_reports/pytest/iter6_results.xml"
+  ],
+  "action_items": [
+    "Optional: move Telegram send in create_order/update_order to FastAPI BackgroundTasks so /api/orders POST returns instantly even if Telegram API is slow/unreachable.",
+    "Optional: store conversion rate snapshot on each order at create-time (or annotate per-order rate) so historical earnings are stable when settings.exchange_rate changes later.",
+    "Optional: tighten fee_freelance currency model — currently assumed always IDR. Add explicit fee_currency field for forward-compat.",
+    "Optional: _sync_freelance_artists could use $regex find as bulk operation; not blocking at current scale."
+  ],
+  "critical_code_review_comments": [
+    "server.py create_order line 290-305: Telegram send is in-process synchronous requests.post with timeout=15s. Wrap in BackgroundTasks(send_telegram, ...) to avoid blocking POST response on slow networks.",
+    "server.py /api/earnings line 456: 'fee_usd = raw_fee / rate' — implicitly assumes fee_freelance is ALWAYS IDR. No assertion or comment in code. Add docstring explaining the convention or introduce fee_currency field.",
+    "server.py /api/earnings: exchange_rate read fresh from settings on every call applied to all historical orders → if admin changes rate from 16000 to 17000, ALL past months' USD totals retroactively shift. For accounting this is dangerous; consider per-order rate snapshot.",
+    "server.py _sync_freelance_artists line 321: case-insensitive regex without escaping — if an artist name contains regex special chars (e.g. '(', '.', '+') the regex compile will fail or match incorrectly. Use re.escape(name) before interpolation.",
+    "Freelance.jsx ProjectModal pickOrder: per-artist split divides fee equally among artists — but if order has mixed Tim+Freelance statuses, the freelancer share might be over-credited (Tim members shouldn't reduce the freelance fee split). Verify business logic with stakeholder."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter6.py"
+  ],
+  "success_rate": {"backend": "100% (7/7 iter6 pytest)", "frontend": "100% — all 11 iter6 UI checkpoints verified (artist-row layout, w-24 select, fee-percent=10.0%, project-modal portal, Info/Pembayaran sections, order picker count + search input + auto-fill of project/platform/fee/tanggal, earning USD reasonable values, currency toggle)"},
+  "test_credentials": "Seeded admin token sess_admin_iter6_1777765697909 (admin.iter6@magsika.test, role=admin). Bearer header for pytest, session_token cookie for Playwright (domain=order-management-110.preview.emergentagent.com, secure, sameSite=None).",
+  "seed_data_creation": "Created during tests (all cleaned up post-run): 4 Iter6Test orders (Iter6Test Client/Client2/Client3/Math Client), 1 UITest order (UITest Client→UITest Freelance Order), auto-created freelance artists Iter6TestArtistB, Iter6TestArtistC, MathArtist, UITestArtistFree, TestArtist1. Cleanup mongosh confirmed: 1 order + 1 artist remained → deleted. Settings telegram_chat_id restored to -1003611845591, exchange_rate=16000.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter6 production-ready. Run pytest /app/backend/tests/test_iter6.py with ITER6_TOKEN env (re-seed admin via mongosh script in /app/memory/test_credentials.md). All telegram tests bypass real API by blanking creds in autouse fixture before each test session; restored at module teardown. For UI tests of order-picker auto-fill, seed at least one order with currency=USD + fee_freelance>0 + artist_statuses containing 'Freelance' for the target artist before opening Freelance ProjectModal. Telegram chat_id=-1003611845591; do NOT call /api/orders/{id}/notify or POST /api/settings/test-telegram in tests — they will hit real Telegram. Auto-freelance sync uses case-insensitive regex match on freelance_artists.name — to avoid duplicates use the same casing across tests.",
+  "rca of the issue": "n/a — no blockers. All 5 Iter6 specs (auto-freelance sync, telegram on order create, earnings USD normalization, OrderModal artist row layout + fee chip, Freelance ProjectModal portal+sections+order-picker+autofill) verified working end-to-end."
+}
