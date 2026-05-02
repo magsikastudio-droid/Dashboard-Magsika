@@ -70,14 +70,16 @@ class Order(BaseModel):
     jenis: str = "Modeling"
     status: str = "modeling"
     artists: List[str] = []
+    artist_statuses: List[str] = []  # parallel array: "Tim" or "Freelance"
     value: float = 0
+    currency: str = "USD"  # USD or IDR
     paid: bool = False
     catatan: str = ""
-    # New fields
     platform: str = "Direct"
     marketer: str = ""
-    order_id: str = ""       # manual
-    folder_code: str = ""    # auto
+    order_id: str = ""
+    folder_code: str = ""
+    folder_code_manual: bool = False  # if true, do not regen
     fee_freelance: float = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -89,12 +91,16 @@ class OrderInput(BaseModel):
     jenis: str = "Modeling"
     status: str = "modeling"
     artists: List[str] = []
+    artist_statuses: List[str] = []
     value: float = 0
+    currency: str = "USD"
     paid: bool = False
     catatan: str = ""
     platform: str = "Direct"
     marketer: str = ""
     order_id: str = ""
+    folder_code: str = ""
+    folder_code_manual: bool = False
     fee_freelance: float = 0
 
 class Settings(BaseModel):
@@ -103,12 +109,14 @@ class Settings(BaseModel):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     reminders_enabled: bool = True
+    exchange_rate: float = 16000  # IDR per USD
 
 class SettingsInput(BaseModel):
     allowed_emails: List[str] = []
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     reminders_enabled: bool = True
+    exchange_rate: float = 16000
 
 class ReassignInput(BaseModel):
     artists: Optional[List[str]] = None
@@ -268,8 +276,9 @@ async def list_orders(user: User = Depends(get_current_user)):
 @api_router.post("/orders", response_model=Order)
 async def create_order(payload: OrderInput, user: User = Depends(get_current_user)):
     data = payload.model_dump()
-    # auto folder code
-    data["folder_code"] = await generate_folder_code(data["tanggal"], data["platform"], data["klien"], data["project"])
+    if not data.get("folder_code") or not data.get("folder_code_manual"):
+        data["folder_code"] = await generate_folder_code(data["tanggal"], data["platform"], data["klien"], data["project"])
+        data["folder_code_manual"] = False
     order = Order(**data)
     doc = order.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
@@ -283,12 +292,13 @@ async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Dep
     if not existing:
         raise HTTPException(404, "Order not found")
     update_data = payload.model_dump()
-    # regenerate folder code only if platform/tanggal/klien/project changed
-    if (existing.get("platform") != update_data.get("platform")
+    # If user supplied manual folder code, keep it
+    if update_data.get("folder_code_manual") and update_data.get("folder_code"):
+        pass
+    elif (existing.get("platform") != update_data.get("platform")
         or existing.get("tanggal") != update_data.get("tanggal")
         or existing.get("klien") != update_data.get("klien")
         or existing.get("project") != update_data.get("project")):
-        # exclude current order from the count via query filter (atomic, no tmp write)
         date_compact = update_data["tanggal"].replace("-", "")[2:] if update_data.get("tanggal") else "000000"
         code = PLATFORM_CODES.get(update_data.get("platform"), "ETC")
         existing_count = await db.orders.count_documents({
@@ -300,6 +310,7 @@ async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Dep
         client_part = sanitize_upper(update_data.get("klien", "")).replace(" ", "")
         project_part = sanitize_upper(update_data.get("project", ""))
         update_data["folder_code"] = f"{date_compact}-{code}{seq:02d}-{client_part}-{project_part}"
+        update_data["folder_code_manual"] = False
     else:
         update_data["folder_code"] = existing.get("folder_code", "")
     await db.orders.update_one({"id": order_id_uuid}, {"$set": update_data})
@@ -307,6 +318,46 @@ async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Dep
     order = Order(**merged)
     await manager.broadcast({"type": "order.updated", "order": order.model_dump(mode="json")})
     return order
+
+# ---------- Telegram notify per-order ----------
+class NotifyInput(BaseModel):
+    type: str  # "new" | "reminder" | "warning" | "custom"
+
+@api_router.post("/orders/{order_id_uuid}/notify")
+async def notify_order(order_id_uuid: str, payload: NotifyInput, user: User = Depends(get_current_user)):
+    o = await db.orders.find_one({"id": order_id_uuid}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    s = await get_settings_doc()
+    token = s.get("telegram_bot_token", "")
+    chat_id = s.get("telegram_chat_id", "")
+    if not token or not chat_id:
+        raise HTTPException(400, "Telegram belum dikonfigurasi")
+    # compute days remaining
+    try:
+        deadline_dt = datetime.fromisoformat(o["deadline"]).replace(tzinfo=timezone.utc).replace(hour=23, minute=59)
+        days_left = max(0, (deadline_dt - datetime.now(timezone.utc)).days)
+    except Exception:
+        days_left = "?"
+    common = (
+        f"📁 Project   : {o['project']}\n"
+        f"👤 Client    : {o['klien']}\n"
+        f"📂 Folder    : `{o.get('folder_code','')}`\n"
+        f"📅 Deadline  : {o['deadline']}\n"
+    )
+    t = payload.type
+    if t == "new":
+        msg = f"🆕 *ORDER BARU MASUK*\n\n{common}\n🚀 Silakan segera diproses."
+    elif t == "warning":
+        msg = f"❗ *WARNING DEADLINE H-1*\n\n{common}\n🚨 Deadline BESOK! Pastikan selesai tepat waktu!"
+    elif t == "reminder":
+        msg = f"⏰ *REMINDER DEADLINE*\n\n{common}\n⚠️ Deadline sudah semakin dekat, segera diselesaikan."
+    else:
+        msg = f"⏳ *REMINDER DEADLINE*\n\n{common}\n⚠️ Deadline tersisa *{days_left} hari lagi*!"
+    ok = send_telegram(token, chat_id, msg)
+    if not ok:
+        raise HTTPException(500, "Gagal kirim Telegram")
+    return {"ok": True, "type": t, "days_left": days_left}
 
 @api_router.delete("/orders/{order_id_uuid}")
 async def delete_order(order_id_uuid: str, user: User = Depends(get_current_user)):
