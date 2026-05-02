@@ -166,7 +166,7 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <StatCard testid="stat-total-project" icon={Dice5} label="Total Project" value={stats.total} sub={`${stats.done} selesai · ${stats.onProgress} aktif`} accent="#6d4cff" trend={trend(stats.total, prevStats.total)} />
-        <StatCard testid="stat-total-equity" icon={Gem} label="Total Equity" value={fmt(stats.totalValue, display)} sub={monthLabel(month)} accent="#3a8dff" trend={trend(stats.totalValue, prevStats.totalValue)} />
+        <StatCard testid="stat-total-value" icon={Gem} label="Total Equity" value={fmt(stats.totalValue, display)} sub={monthLabel(month)} accent="#3a8dff" trend={trend(stats.totalValue, prevStats.totalValue)} />
         <StatCard testid="stat-done" icon={CheckCircle2} label="Done / Selesai" value={fmt(stats.doneValue, display)} sub={`${stats.total ? Math.round((stats.done / stats.total) * 100) : 0}% completion`} accent="#16a34a" />
         <StatCard testid="stat-net" icon={Hourglass} label="Net (— Fee)" value={fmt(stats.net, display)} sub={`Fee: ${fmt(stats.totalFee, display)}`} accent="#f59e0b" trend={trend(stats.net, prevStats.net)} />
         <StatCard testid="stat-unpaid" icon={Wallet} label="Belum Dibayar" value={fmt(stats.unpaid, display)} sub="Outstanding" accent="#ef4444" />
