@@ -36,6 +36,37 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - Telegram reminder loop + test endpoint
 - Archive page
 
+## Implemented (iter 5 — Tier 2, 2026-05-02) ✅
+- ✅ Telegram CHAT_ID updated to `-1003611845591` (group chat) in backend/.env + db.settings
+- ✅ Dashboard labels: "Net (— Fee)" → "Fee Freelance", "Belum Dibayar" → "Pending Payment"
+- ✅ Dashboard Total per Klien now vertical stacked list (avatar + name + count + total + done% + invoice button + progress bar) instead of side-by-side grid cards
+- ✅ OrderModal Artist badge on single line (`whitespace-nowrap` + `Artist&nbsp;{i+1}`)
+- ✅ Earning page full rewrite:
+  - Month filter + Bulanan / Mingguan tabs
+  - 6-month SVG trend chart (Gross purple, Fee yellow dashed, Net green) with Y-axis and x-labels
+  - Simplified monthly table colors (gross dark, fee orange, net green)
+  - Platform table with mini bars per cell showing % of row total
+  - "Skrg" badge next to current month
+  - 4 top stat cards with trend chips (Total / Magsika / Eirene / Lolicharm+Lain)
+  - Weekly manual input tables: Magsika, Eirene, Lolicharm+Komunitas groups with 6 columns (FIVERR, ETSY, UPWORK, VGEN, KOMUNITAS, LAIN-LAIN)
+  - Editable targets ($2000 default for Magsika & Eirene) with progress bar
+  - `+ Tambah minggu` button per group
+  - Auto-accumulation table at bottom (Minggu 1..N with cumulative + per-column totals)
+  - Debounced PUT /api/weekly/{yyyymm} on every cell edit
+- ✅ Freelance page full rewrite:
+  - Clickable artist cards (avatar initial, name, count, UNPAID/LUNAS badge, total fee, rekening + phone, salin/edit/delete buttons, lunas progress bar)
+  - 4 summary stat cards at top (Total fee, Sudah dibayar, Belum dibayar, Artist aktif)
+  - Detail table: Tanggal, Project, PIC, Status Project, Fee (with DP info), Tanggal DP, Tanggal Pelunasan, Status Bayar (3-level: Paid/Unpaid/DP saja)
+  - Transfer / Lunasi buttons per row (auto-sets pelunasan_date = today)
+  - Edit/Delete modals for both artist profile (name, bank, rekening, phone) and project (full fields)
+  - Baris total per artist di bawah tabel (Total fee / Paid / Sisa)
+- ✅ New backend endpoints:
+  - `GET/PUT /api/weekly/{yyyymm}` — weekly earnings doc
+  - `GET/POST/PUT/DELETE /api/freelance/artists`
+  - `GET/POST/PUT/DELETE /api/freelance/projects` (supports `?artist_id=&month=YYYY-MM` filter)
+  - DELETE artist cascades to related projects
+- ✅ Tested 10/10 pytest + 10/10 Playwright frontend
+
 ## Implemented (iter 4 — Tier 1, 2026-05-02) ✅
 - ✅ Global USD/IDR currency toggle (CurrencyContext.jsx) wired across Dashboard / Earning / Invoice / Orders / OrderModal
 - ✅ Manual exchange rate input in header (localStorage + admin sync)
