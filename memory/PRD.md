@@ -36,12 +36,15 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - ✅ Backend: orders CRUD + WebSocket broadcast
 - ✅ Backend: 12 sample orders seed (idempotent)
 - ✅ Frontend: Login page + AuthCallback (race-condition-safe)
-- ✅ Frontend: Dashboard (KPI cards, late banner, Total per Klien grid)
-- ✅ Frontend: Orders (table + 4 filter + search, Add/Edit/Delete modal, toggle paid, Export CSV)
-- ✅ Frontend: Board per Artist (kanban, status filter)
-- ✅ Frontend: Invoice (klien + bulan select, printable invoice doc, totals)
-- ✅ Live indicator (WebSocket connected status)
-- ✅ Tested 100% pass (backend pytest 11/11, frontend Playwright all flows)
+- ✅ Frontend: Dashboard, Orders, Board, Invoice
+- ✅ Tested 100% pass
+
+## Implemented (iter 2)
+- ✅ Email whitelist (admin-managed via Settings UI). First user auto-admin. Backfill role='member' for legacy users.
+- ✅ Drag-and-drop on Board with view-mode toggle (per Artist / per Status). Drag updates artist or status via PATCH /api/orders/{id}/reassign.
+- ✅ WhatsApp reminder via Fonnte at 3 hari / 2 hari / 1 hari / 6 jam sebelum deadline. Background asyncio loop every 10 min, dedup via sent_reminders. Token + admin_wa configurable di Settings.
+- ✅ Settings page (admin only): whitelist emails, list users, Fonnte config, toggle reminders.
+- ✅ Tested 27/27 backend + frontend pass.
 
 ## Backlog (P0/P1/P2)
 - **P1**: Drag-and-drop kanban board (move card → update status)

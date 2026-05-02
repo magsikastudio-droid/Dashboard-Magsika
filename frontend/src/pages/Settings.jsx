@@ -13,6 +13,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (user?.role !== "admin") { setLoading(false); return; }
     (async () => {
       try {
         const [s, u] = await Promise.all([api.get("/settings"), api.get("/users")]);
@@ -24,7 +25,7 @@ export default function Settings() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [user]);
 
   const save = async () => {
     setSaving(true);

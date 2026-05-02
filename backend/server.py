@@ -438,6 +438,8 @@ async def seed_sample():
             doc["created_at"] = doc["created_at"].isoformat()
             await db.orders.insert_one(doc)
         logger.info(f"Seeded {len(SAMPLE_ORDERS)} sample orders")
+    # backfill missing roles
+    await db.users.update_many({"role": {"$exists": False}}, {"$set": {"role": "member"}})
     # ensure settings exist
     await get_settings_doc()
     # start reminder background task
