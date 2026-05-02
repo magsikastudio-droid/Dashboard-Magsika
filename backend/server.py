@@ -342,18 +342,21 @@ async def notify_order(order_id_uuid: str, payload: NotifyInput, user: User = De
     common = (
         f"📁 Project   : {o['project']}\n"
         f"👤 Client    : {o['klien']}\n"
-        f"📂 Folder    : `{o.get('folder_code','')}`\n"
+        f"📂 Folder    : {o.get('folder_code','')}\n"
         f"📅 Deadline  : {o['deadline']}\n"
     )
     t = payload.type
     if t == "new":
-        msg = f"🆕 *ORDER BARU MASUK*\n\n{common}\n🚀 Silakan segera diproses."
+        msg = f"🆕 ORDER BARU MASUK\n\n{common}🚀 Silakan segera diproses."
     elif t == "warning":
-        msg = f"❗ *WARNING DEADLINE H-1*\n\n{common}\n🚨 Deadline BESOK! Pastikan selesai tepat waktu!"
+        # H-1
+        msg = f"❗ WARNING DEADLINE H-1\n\n{common}🚨 Deadline BESOK! Pastikan selesai tepat waktu!"
     elif t == "reminder":
-        msg = f"⏰ *REMINDER DEADLINE*\n\n{common}\n⚠️ Deadline sudah semakin dekat, segera diselesaikan."
+        # <5 hari & <3 hari (recipient sees the same template, days_left differentiates)
+        msg = f"⏰ REMINDER DEADLINE\n\n{common}⚠️ Deadline sudah semakin dekat, segera diselesaikan."
     else:
-        msg = f"⏳ *REMINDER DEADLINE*\n\n{common}\n⚠️ Deadline tersisa *{days_left} hari lagi*!"
+        # custom: manual ping with sisa_hari
+        msg = f"⏳ REMINDER DEADLINE\n\n{common}⚠️ Deadline tersisa {days_left} hari lagi!"
     ok = send_telegram(token, chat_id, msg)
     if not ok:
         raise HTTPException(500, "Gagal kirim Telegram")
@@ -447,6 +450,42 @@ async def get_freelance(user: User = Depends(get_current_user)):
         "rows": sorted(rows, key=lambda x: x["tanggal"] or "", reverse=True),
     }
 
+# ---------- Invoice tracking ----------
+class InvoiceInput(BaseModel):
+    klien: str
+    invoice_no: str
+    order_ids: List[str] = []
+    total_display: float = 0
+    currency_display: str = "USD"
+
+@api_router.get("/invoices/next")
+async def next_invoice(klien: str, user: User = Depends(get_current_user)):
+    cnt = await db.invoices.count_documents({"klien": klien})
+    return {"klien": klien, "next": cnt + 1}
+
+@api_router.post("/invoices")
+async def create_invoice_record(payload: InvoiceInput, user: User = Depends(get_current_user)):
+    cnt = await db.invoices.count_documents({"klien": payload.klien})
+    doc = {
+        "id": str(uuid.uuid4()),
+        "klien": payload.klien,
+        "invoice_no": payload.invoice_no,
+        "order_ids": payload.order_ids,
+        "total_display": payload.total_display,
+        "currency_display": payload.currency_display,
+        "seq": cnt + 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": user.email,
+    }
+    await db.invoices.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/invoices")
+async def list_invoices(user: User = Depends(get_current_user)):
+    docs = await db.invoices.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
 # ---------- Settings ----------
 @api_router.get("/settings")
 async def get_settings(user: User = Depends(require_admin)):
@@ -468,7 +507,7 @@ async def test_telegram(user: User = Depends(require_admin)):
     chat_id = s.get("telegram_chat_id", "")
     if not token or not chat_id:
         raise HTTPException(400, "Telegram belum dikonfigurasi")
-    ok = send_telegram(token, chat_id, "✅ *Magsika Studio*: Test reminder Telegram OK!")
+    ok = send_telegram(token, chat_id, "✅ Magsika Studio: Test reminder Telegram OK!")
     if not ok:
         raise HTTPException(400, "Gagal kirim pesan test")
     return {"ok": True}
@@ -480,10 +519,9 @@ async def list_users(user: User = Depends(require_admin)):
 
 # ---------- Telegram Reminder ----------
 REMINDER_THRESHOLDS = [
+    ("5d", timedelta(days=5)),
     ("3d", timedelta(days=3)),
-    ("2d", timedelta(days=2)),
     ("1d", timedelta(days=1)),
-    ("6h", timedelta(hours=6)),
 ]
 DONE_STATUSES = {"done", "delivered", "cancel", "cancle"}
 
@@ -493,7 +531,7 @@ def send_telegram(token: str, chat_id: str, text: str) -> bool:
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            data={"chat_id": chat_id, "text": text},
             timeout=15,
         )
         return r.status_code == 200
@@ -532,16 +570,17 @@ async def reminder_loop():
                     sent = await db.sent_reminders.find_one({"_id": key})
                     if sent:
                         continue
-                    label_human = {"3d": "3 hari", "2d": "2 hari", "1d": "1 hari", "6h": "6 jam"}[label]
-                    msg = (
-                        f"⚠️ *Reminder Magsika Studio*\n\n"
-                        f"📦 *{o['project']}*\n"
-                        f"👤 Klien: {o['klien']}\n"
-                        f"🎨 Artist: {', '.join(o.get('artists', [])) or '-'}\n"
-                        f"📅 Deadline: `{o['deadline']}` (dalam *{label_human}*)\n"
-                        f"🏷️ Status: _{o.get('status')}_\n"
-                        f"📁 `{o.get('folder_code','')}`"
+                    common = (
+                        f"📁 Project   : {o['project']}\n"
+                        f"👤 Client    : {o['klien']}\n"
+                        f"📂 Folder    : {o.get('folder_code','')}\n"
+                        f"📅 Deadline  : {o['deadline']}\n"
                     )
+                    if label == "1d":
+                        msg = f"❗ WARNING DEADLINE H-1\n\n{common}🚨 Deadline BESOK! Pastikan selesai tepat waktu!"
+                    else:
+                        # 5d or 3d: same REMINDER DEADLINE template
+                        msg = f"⏰ REMINDER DEADLINE\n\n{common}⚠️ Deadline sudah semakin dekat, segera diselesaikan."
                     ok = send_telegram(token, chat_id, msg)
                     if ok:
                         await db.sent_reminders.insert_one({"_id": key, "sent_at": now.isoformat()})

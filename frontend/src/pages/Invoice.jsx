@@ -1,16 +1,26 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Receipt, Printer, Search, Check, FileText } from "lucide-react";
+import { Receipt, Printer, Search, Check, FileText, Building2 } from "lucide-react";
 import { useOrders } from "../context/OrdersContext";
-import { fmtRp, fmtDate, monthKey, monthLabel } from "../lib/format";
+import { useCurrency } from "../context/CurrencyContext";
+import { api } from "../lib/api";
+import { fmtDate, monthKey, monthLabel } from "../lib/format";
+
+const sanitizeName = (s) => (s || "")
+  .toUpperCase()
+  .replace(/[^A-Z0-9 ]+/g, "")
+  .replace(/\s+/g, "")
+  .slice(0, 24);
 
 export default function Invoice() {
   const { orders } = useOrders();
+  const { fmt, convert, display } = useCurrency();
   const [searchParams] = useSearchParams();
   const [q, setQ] = useState("");
   const [klien, setKlien] = useState("");
   const [bulan, setBulan] = useState("all");
   const [selected, setSelected] = useState(new Set());
+  const [nextNo, setNextNo] = useState(1);
 
   // Initial seed from URL
   useEffect(() => {
@@ -22,6 +32,14 @@ export default function Invoice() {
     if (o) { setSelected(new Set([o])); const ord = orders.find((x) => x.id === o); if (ord) setKlien(ord.klien); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, orders.length]);
+
+  // fetch next invoice number from backend whenever klien changes
+  useEffect(() => {
+    if (!klien) { setNextNo(1); return; }
+    api.get(`/invoices/next?klien=${encodeURIComponent(klien)}`)
+      .then((r) => setNextNo(r.data?.next || 1))
+      .catch(() => setNextNo(1));
+  }, [klien]);
 
   const klienList = useMemo(() => Array.from(new Set(orders.map((o) => o.klien))).filter(Boolean).sort(), [orders]);
   const bulanList = useMemo(() => Array.from(new Set(orders.filter((o) => !klien || o.klien === klien).map((o) => monthKey(o.tanggal)))).sort().reverse(), [orders, klien]);
@@ -52,11 +70,34 @@ export default function Invoice() {
   const clearSel = () => setSelected(new Set());
 
   const invKlien = items[0]?.klien || klien || "-";
-  const total = items.reduce((s, o) => s + (o.value || 0), 0);
-  const paid = items.filter((o) => o.paid).reduce((s, o) => s + (o.value || 0), 0);
+
+  // Sum in display currency
+  const total = items.reduce((s, o) => s + convert(o.value || 0, o.currency || "USD"), 0);
+  const paid = items.filter((o) => o.paid).reduce((s, o) => s + convert(o.value || 0, o.currency || "USD"), 0);
   const due = total - paid;
 
-  const invNumber = `MS-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, "0")}-${(invKlien || "ALL").substring(0, 3).toUpperCase()}-${selected.size > 0 ? selected.size : items.length}`;
+  // Invoice number: [YYMMDD]-[CLIENT]-INV-N
+  const today = new Date();
+  const yymmdd = `${String(today.getFullYear()).slice(2)}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+  const invNumber = `${yymmdd}-${sanitizeName(invKlien) || "ALL"}-INV-${nextNo}`;
+
+  const handlePrint = async () => {
+    if (items.length === 0) return;
+    // Save invoice record (increments counter on backend)
+    try {
+      await api.post("/invoices", {
+        klien: invKlien,
+        invoice_no: invNumber,
+        order_ids: items.map((o) => o.id),
+        total_display: total,
+        currency_display: display,
+      });
+      // refresh next number
+      const r = await api.get(`/invoices/next?klien=${encodeURIComponent(invKlien)}`);
+      setNextNo(r.data?.next || nextNo + 1);
+    } catch (e) { /* non-fatal */ }
+    window.print();
+  };
 
   return (
     <div className="space-y-6" data-testid="invoice-page">
@@ -89,7 +130,7 @@ export default function Invoice() {
                   <div className="font-semibold text-sm truncate">{o.project}</div>
                   <div className="text-xs text-[var(--ms-text-muted)] font-mono truncate">{o.klien} · {o.folder_code} · {fmtDate(o.tanggal)}</div>
                 </div>
-                <div className="font-mono text-xs font-bold">{fmtRp(o.value)}</div>
+                <div className="font-mono text-xs font-bold">{fmt(o.value, o.currency || "USD")}</div>
               </button>
             ))}
           </div>
@@ -111,7 +152,8 @@ export default function Invoice() {
             </>
           )}
           <div className="flex-1" />
-          <button onClick={() => window.print()} disabled={items.length === 0} className="flex items-center gap-2 px-4 py-2 rounded-full text-white text-sm font-semibold transition-base hover:opacity-90 disabled:opacity-50" style={{ background: "var(--ms-primary)" }} data-testid="print-btn">
+          {klien && <span className="text-xs font-mono text-[var(--ms-text-muted)]" data-testid="next-invoice-no">Invoice ke-<strong style={{ color: "var(--ms-primary)" }}>{nextNo}</strong> untuk {invKlien}</span>}
+          <button onClick={handlePrint} disabled={items.length === 0} className="flex items-center gap-2 px-4 py-2 rounded-full text-white text-sm font-semibold transition-base hover:opacity-90 disabled:opacity-50" style={{ background: "var(--ms-primary)" }} data-testid="print-btn">
             <Printer size={15} /> Print / Save PDF
           </button>
         </div>
@@ -128,7 +170,7 @@ export default function Invoice() {
                   <div className="font-semibold text-sm truncate">{o.project}</div>
                   <div className="text-xs text-[var(--ms-text-muted)] font-mono truncate">{o.folder_code} · {fmtDate(o.tanggal)}</div>
                 </div>
-                <div className="font-mono text-xs font-bold">{fmtRp(o.value)}</div>
+                <div className="font-mono text-xs font-bold">{fmt(o.value, o.currency || "USD")}</div>
                 <span className="text-[0.65rem] font-bold font-mono px-2 py-0.5 rounded-full" style={{ background: o.paid ? "#dcfce7" : "#fee2e2", color: o.paid ? "#15803d" : "#b91c1c" }}>{o.paid ? "LUNAS" : "BELUM"}</span>
               </button>
             ))}
@@ -182,7 +224,7 @@ export default function Invoice() {
                   <td className="py-3 font-mono text-xs">{fmtDate(o.tanggal)}</td>
                   <td className="py-3 font-semibold">{o.project}</td>
                   <td className="py-3 font-mono text-[0.68rem] text-[var(--ms-text-muted)]">{o.folder_code}</td>
-                  <td className="py-3 text-right font-mono font-semibold">{fmtRp(o.value)}</td>
+                  <td className="py-3 text-right font-mono font-semibold">{fmt(o.value, o.currency || "USD")}</td>
                   <td className="py-3 text-center text-xs font-bold font-mono" style={{ color: o.paid ? "#15803d" : "#b91c1c" }}>{o.paid ? "LUNAS" : "BELUM"}</td>
                 </tr>
               ))}
@@ -191,17 +233,42 @@ export default function Invoice() {
 
           <div className="flex justify-end">
             <div className="w-full max-w-xs space-y-2">
-              <div className="flex justify-between text-sm"><span className="text-[var(--ms-text-muted)]">Total Tagihan</span><span className="font-mono font-semibold">{fmtRp(total)}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-[var(--ms-text-muted)]">Sudah Dibayar</span><span className="font-mono font-semibold text-emerald-700">{fmtRp(paid)}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-[var(--ms-text-muted)]">Total Tagihan</span><span className="font-mono font-semibold">{fmt(total, display)}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-[var(--ms-text-muted)]">Sudah Dibayar</span><span className="font-mono font-semibold text-emerald-700">{fmt(paid, display)}</span></div>
               <div className="flex justify-between border-t-2 border-[var(--ms-border)] pt-3 mt-2">
                 <span className="font-display text-lg font-bold">Sisa Tagihan</span>
-                <span className="font-display text-lg font-extrabold" style={{ color: due > 0 ? "var(--ms-red)" : "var(--ms-green)" }} data-testid="invoice-due">{fmtRp(due)}</span>
+                <span className="font-display text-lg font-extrabold" style={{ color: due > 0 ? "var(--ms-red)" : "var(--ms-green)" }} data-testid="invoice-due">{fmt(due, display)}</span>
               </div>
             </div>
           </div>
 
-          <div className="mt-10 pt-6 border-t-2 border-[var(--ms-border)] text-xs text-[var(--ms-text-muted)] font-mono leading-relaxed">
-            <strong className="text-[var(--ms-text)]">Pembayaran:</strong> Transfer ke rekening Magsika Studio sesuai instruksi yang telah diberikan.<br />
+          {/* Bank details */}
+          <div className="mt-10 pt-6 border-t-2 border-[var(--ms-border)]" data-testid="bank-details">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-700 flex-shrink-0">
+                <Building2 size={22} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono mb-2" style={{ color: "var(--ms-primary)" }}>Pembayaran ditransfer ke</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+                  <div>
+                    <div className="text-[0.62rem] uppercase tracking-wider font-mono text-[var(--ms-text-muted)]">Bank</div>
+                    <div className="font-display text-base font-bold">BCA</div>
+                  </div>
+                  <div>
+                    <div className="text-[0.62rem] uppercase tracking-wider font-mono text-[var(--ms-text-muted)]">No. Rekening</div>
+                    <div className="font-mono text-base font-bold tracking-wide">8030651287</div>
+                  </div>
+                  <div>
+                    <div className="text-[0.62rem] uppercase tracking-wider font-mono text-[var(--ms-text-muted)]">Atas Nama</div>
+                    <div className="font-display text-base font-bold">Ivo Febrian Pratama</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 text-xs text-[var(--ms-text-muted)] font-mono leading-relaxed">
             Terima kasih atas kepercayaan Anda. — Magsika Studio Team
           </div>
         </div>

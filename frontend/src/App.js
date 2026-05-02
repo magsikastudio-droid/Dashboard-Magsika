@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/context/AuthContext";
 import { OrdersProvider } from "@/context/OrdersContext";
+import { CurrencyProvider } from "@/context/CurrencyContext";
 import Layout from "@/components/Layout";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Login from "@/pages/Login";
@@ -20,9 +21,11 @@ import Archive from "@/pages/Archive";
 const gated = (Page) => (
   <ProtectedRoute>
     <OrdersProvider>
-      <Layout>
-        <Page />
-      </Layout>
+      <CurrencyProvider>
+        <Layout>
+          <Page />
+        </Layout>
+      </CurrencyProvider>
     </OrdersProvider>
   </ProtectedRoute>
 );

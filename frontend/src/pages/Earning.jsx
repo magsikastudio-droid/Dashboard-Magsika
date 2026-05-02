@@ -1,12 +1,20 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { TrendingUp, DollarSign, Wallet } from "lucide-react";
+import { TrendingUp } from "lucide-react";
 import { api } from "../lib/api";
-import { fmtRp, monthLabel, currentMonth } from "../lib/format";
+import { useCurrency } from "../context/CurrencyContext";
+import { monthLabel, currentMonth } from "../lib/format";
 import { PLATFORM_COLORS, PLATFORM_OPTIONS } from "../lib/constants";
+
+// Earning data from backend is in IDR base (legacy values stored as numbers).
+// We treat each amount as the order's stored currency. Backend aggregates raw value field which is mixed.
+// For display: we trust "USD" base when convert(amount, "USD") since most data was IDR.
+// Since legacy stored values may be in IDR, we add a simple heuristic: amounts > 100000 = IDR, else USD.
+const guessCur = (n) => (Number(n) > 100000 ? "IDR" : "USD");
 
 export default function Earning() {
   const [data, setData] = useState({ by_month: [], by_platform_month: [] });
   const [loading, setLoading] = useState(true);
+  const { fmt, convert, display } = useCurrency();
 
   useEffect(() => {
     (async () => {
@@ -15,10 +23,11 @@ export default function Earning() {
     })();
   }, []);
 
+  const cv = (n) => convert(Number(n) || 0, guessCur(n));
+
   const months = data.by_month;
   const current = months.find((m) => m.month === currentMonth()) || { gross: 0, fee: 0, net: 0, paid: 0, unpaid: 0, count: 0 };
 
-  // pivot by_platform_month: rows = months, cols = platforms
   const pivot = useMemo(() => {
     const table = {};
     data.by_platform_month.forEach((row) => {
@@ -43,17 +52,17 @@ export default function Earning() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white rounded-2xl border border-[var(--ms-border)] p-5" data-testid="earn-current">
           <div className="text-[0.65rem] uppercase tracking-wider font-bold text-[var(--ms-text-muted)] font-mono mb-1">Gross bulan ini</div>
-          <div className="font-display text-2xl font-extrabold" style={{ color: "var(--ms-primary)" }}>{fmtRp(current.gross)}</div>
-          <div className="text-xs text-[var(--ms-text-muted)] mt-2">{current.count} order · paid {fmtRp(current.paid)}</div>
+          <div className="font-display text-2xl font-extrabold" style={{ color: "var(--ms-primary)" }}>{fmt(cv(current.gross), display)}</div>
+          <div className="text-xs text-[var(--ms-text-muted)] mt-2">{current.count} order · paid {fmt(cv(current.paid), display)}</div>
         </div>
         <div className="bg-white rounded-2xl border border-[var(--ms-border)] p-5">
           <div className="text-[0.65rem] uppercase tracking-wider font-bold text-[var(--ms-text-muted)] font-mono mb-1">Fee Freelance</div>
-          <div className="font-display text-2xl font-extrabold text-amber-600">{fmtRp(current.fee)}</div>
+          <div className="font-display text-2xl font-extrabold text-amber-600">{fmt(convert(current.fee || 0, "IDR"), display)}</div>
           <div className="text-xs text-[var(--ms-text-muted)] mt-2">Dibayarkan ke artist</div>
         </div>
         <div className="bg-white rounded-2xl border border-[var(--ms-border)] p-5">
           <div className="text-[0.65rem] uppercase tracking-wider font-bold text-[var(--ms-text-muted)] font-mono mb-1">Net Earning</div>
-          <div className="font-display text-2xl font-extrabold text-emerald-700">{fmtRp(current.net)}</div>
+          <div className="font-display text-2xl font-extrabold text-emerald-700">{fmt(cv(current.net), display)}</div>
           <div className="text-xs text-[var(--ms-text-muted)] mt-2">Gross − Fee</div>
         </div>
       </div>
@@ -75,11 +84,11 @@ export default function Earning() {
                 <tr key={m.month} className="border-t border-[var(--ms-border)] hover:bg-[var(--ms-bg)]">
                   <td className="px-4 py-3 font-semibold">{monthLabel(m.month)}{m.month === currentMonth() && <span className="ml-2 text-[0.65rem] font-mono font-bold px-1.5 py-0.5 rounded bg-[var(--ms-primary-soft)]" style={{ color: "var(--ms-primary)" }}>SKRG</span>}</td>
                   <td className="px-4 py-3 font-mono text-xs">{m.count}</td>
-                  <td className="px-4 py-3 font-mono font-semibold">{fmtRp(m.gross)}</td>
-                  <td className="px-4 py-3 font-mono text-amber-700">{fmtRp(m.fee)}</td>
-                  <td className="px-4 py-3 font-mono font-bold text-emerald-700">{fmtRp(m.net)}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-emerald-700">{fmtRp(m.paid)}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-rose-700">{fmtRp(m.unpaid)}</td>
+                  <td className="px-4 py-3 font-mono font-semibold">{fmt(cv(m.gross), display)}</td>
+                  <td className="px-4 py-3 font-mono text-amber-700">{fmt(convert(m.fee || 0, "IDR"), display)}</td>
+                  <td className="px-4 py-3 font-mono font-bold text-emerald-700">{fmt(cv(m.net), display)}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-emerald-700">{fmt(cv(m.paid), display)}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-rose-700">{fmt(cv(m.unpaid), display)}</td>
                 </tr>
               ))}
             </tbody>
@@ -108,8 +117,8 @@ export default function Earning() {
                 return (
                   <tr key={month} className="border-t border-[var(--ms-border)] hover:bg-[var(--ms-bg)]">
                     <td className="px-4 py-3 font-semibold">{monthLabel(month)}</td>
-                    {PLATFORM_OPTIONS.map((p) => <td key={p} className="px-4 py-3 font-mono text-xs text-right" style={{ color: row[p] ? PLATFORM_COLORS[p] : "#cbd5e1" }}>{row[p] ? fmtRp(row[p]) : "—"}</td>)}
-                    <td className="px-4 py-3 font-mono font-bold text-right" style={{ color: "var(--ms-primary)" }}>{fmtRp(total)}</td>
+                    {PLATFORM_OPTIONS.map((p) => <td key={p} className="px-4 py-3 font-mono text-xs text-right" style={{ color: row[p] ? PLATFORM_COLORS[p] : "#cbd5e1" }}>{row[p] ? fmt(cv(row[p]), display) : "—"}</td>)}
+                    <td className="px-4 py-3 font-mono font-bold text-right" style={{ color: "var(--ms-primary)" }}>{fmt(cv(total), display)}</td>
                   </tr>
                 );
               })}

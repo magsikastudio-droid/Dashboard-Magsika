@@ -1,0 +1,45 @@
+{
+  "summary": "Iter 4 Tier 1 testing complete. 12/12 NEW backend pytest tests pass (test_iter4_tier1.py). Verified: (1) Invoice endpoints — GET /api/invoices/next?klien=X returns {klien,next} with next=1 on empty, increments to 2 after POST; POST /api/invoices creates record with seq, no _id leak, includes id/created_at/created_by; per-klien independent counters confirmed (KA seq=2 while KB seq=1); GET /api/invoices returns list without _id. (2) POST /api/orders/{id}/notify returns 400 'Telegram belum dikonfigurasi' when telegram_chat_id/token are blank for ALL 4 types (new/reminder/warning/custom); 404 for unknown order id; 401 without auth — Telegram API was NOT actually called (creds blanked then restored via PUT /api/settings). (3) Settings exchange_rate field present in GET /settings, persisted via PUT (set 17250.5 → echoed back → re-fetched). (4) Regression: /api/auth/me, GET/POST/PUT/DELETE /api/orders, /api/earnings, /api/freelance, artist_statuses array — all green. Frontend Playwright verified: Dashboard renders with Total Project (3) / Total Equity (Rp12.8B) / Done-Selesai / Net (-fee) / Belum Dibayar; Per Klien grid + Per Platform donut SVG render; trend chips (-75%/-97%) visible on cards. Currency toggle USD/IDR buttons + rate display '1$ = Rp16.000' present; rate-btn opens popup with rate-input + save-rate-btn. Orders page table wrapped in overflow-x-auto parent (verified via getComputedStyle traversal). Add Order modal opens portaled to <body>, position:fixed, z-index:1000, overflowY:auto, backdrop-blur class present. notif-new-btn HIDDEN when creating new order (correct). Add-artist creates row with select-artist-status-1 dropdown; setting any artist to 'Freelance' enables fee input, all-Tim disables it (verified). Invoice page source confirms invoice number format `${yymmdd}-${sanitizeName(invKlien)}-INV-${nextNo}` (Invoice.jsx:82), BCA / 8030651287 / Ivo Febrian Pratama strings present at lines 256/260/264, /api/invoices/next called on klien change. Deadline colors: with current data on Mei 2026, no orders fall in <3d/<5d windows (closest is 7d, 'done' status muted) so 0 rose/0 amber cells observed — logic exists in Orders.jsx:18-26 and is correct.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/orders/{id}/notify", "issue": "Endpoint uses blocking 'requests' library inside an async coroutine — same pattern as reminder_loop. Low frequency, acceptable, but consider httpx.AsyncClient for consistency."},
+      {"endpoint": "POST /api/invoices", "issue": "No idempotency guard — re-POSTing the same invoice_no creates a duplicate row. Front-end relies on counter being read fresh; under concurrent prints there's a benign race. Consider unique index on (klien, invoice_no) or (klien, seq)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard", "issues": ["Total Equity stat card does NOT have data-testid='stat-total-value' (per iter3 spec). The card renders correctly but its testid is missing/different — only stat-total-project / stat-done / stat-net / stat-unpaid expose testids. Add data-testid='stat-total-value' (and -value child) for testability parity. Note: the iter3 report previously claimed stat-total-value existed; this iter shows the testid is currently absent."]},
+      {"screen": "Orders table", "issues": ["Row body click does NOT open the edit modal — only the pencil/edit icon in 'Aksi' column does. This is a deliberate UX choice (avoids accidental edits during text-selection) but tests should target [data-testid='edit-btn-<id>'] instead of [data-testid^='order-row-']."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4_tier1.py",
+    "/app/test_reports/pytest/iter4_results.xml"
+  ],
+  "action_items": [
+    "Add data-testid='stat-total-value' (and stat-total-value-value child) to the Total Equity card in Dashboard.jsx for testability parity with the rest of the stat cards.",
+    "Optional: add unique compound index on db.invoices(klien, seq) to make seq generation safe under concurrency (current count_documents+insert is non-atomic).",
+    "Optional: switch send_telegram + per-order notify to httpx.AsyncClient (currently blocks the event loop briefly on each notify click)."
+  ],
+  "critical_code_review_comments": [
+    "server.py POST /api/invoices: count_documents + insert is non-atomic — concurrent prints for same klien can produce duplicate seq values. Use findOneAndUpdate on a counters collection or unique index + retry.",
+    "server.py /api/orders/{id}/notify uses blocking 'requests' inside async; under heavy notify-button mashing this can starve the event loop briefly. Acceptable now (single-admin) but flag.",
+    "server.py reminder_loop: same blocking-request issue. Acceptable at 10-min cadence.",
+    "Invoice.jsx handlePrint POSTs to /api/invoices unconditionally on each print — re-printing the same logical invoice will create another DB row and bump seq. Consider tracking 'this invoice has been recorded' in component state and PATCHing instead of POSTing on subsequent prints.",
+    "OrderModal Telegram notify: handleNotif is fire-and-forget; no toast on success/failure beyond the disabled state. Consider surfacing the response via toast — currently the user has no feedback if the 400 'Telegram belum dikonfigurasi' is returned."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter4_tier1.py"
+  ],
+  "success_rate": {"backend": "100% (12/12 iter4 tests)", "frontend": "100% of iter4-relevant flows verified"},
+  "test_credentials": "Seeded admin token: sess_admin_tier1_1777758394972 (admin.tier1@magsika.test). Cleaned via fixture teardown for backend tests; frontend session left active (will expire in 7d). Telegram creds in DB temporarily cleared during notify-400 test then RESTORED — verified Telegram API was never actually hit during this iteration.",
+  "seed_data_creation": "No seed data created. Test invoices used TEST_-prefixed klien names and were cleaned up post-test. One regression test order created+deleted. 12 April 2026 sample orders intact.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter4 tier1 features production-ready. Run: pytest /app/backend/tests/test_iter4_tier1.py -v. The Total Equity dashboard card lacks data-testid='stat-total-value' — main agent should add this. Frontend cookie-based auth: set session_token cookie before navigating (domain=order-management-110.preview.emergentagent.com, secure, sameSite=None). Existing session token in test_credentials.md (sess_admin_1777758074903) was NOT used — a fresh one (sess_admin_tier1_1777758394972) was seeded for iter4. Notify endpoint MUST NOT be tested with real Telegram creds left intact unless rate-limit-aware — always blank → call → restore (as test_iter4_tier1.py:TestNotify does).",
+  "rca of the issue": "n/a — all tier1 features verified working end-to-end, no blockers."
+}
