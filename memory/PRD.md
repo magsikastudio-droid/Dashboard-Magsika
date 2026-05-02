@@ -40,11 +40,25 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - ✅ Tested 100% pass
 
 ## Implemented (iter 2)
-- ✅ Email whitelist (admin-managed via Settings UI). First user auto-admin. Backfill role='member' for legacy users.
-- ✅ Drag-and-drop on Board with view-mode toggle (per Artist / per Status). Drag updates artist or status via PATCH /api/orders/{id}/reassign.
-- ✅ WhatsApp reminder via Fonnte at 3 hari / 2 hari / 1 hari / 6 jam sebelum deadline. Background asyncio loop every 10 min, dedup via sent_reminders. Token + admin_wa configurable di Settings.
-- ✅ Settings page (admin only): whitelist emails, list users, Fonnte config, toggle reminders.
-- ✅ Tested 27/27 backend + frontend pass.
+- ✅ Email whitelist (admin-managed via Settings UI). First user auto-admin.
+- ✅ Drag-and-drop on Board (per Artist / per Status view toggle).
+- ✅ Reminder scheduler (WA Fonnte at iter 2, replaced with Telegram at iter 3).
+- ✅ Tested 27/27 pass.
+
+## Implemented (iter 3 — major revision)
+- ✅ Order model extended: `platform`, `marketer`, `order_id` (manual), `folder_code` (auto), `fee_freelance`
+- ✅ Folder code generator: `YYMMDD-CODE##-CLIENT-PROJECT` with per-platform-per-date seq. Platform codes: MGSIKA / EIRENE / LLCHRM / DIRECT / LTK.
+- ✅ Expanded STATUS (17 opts): need designer, modeling, teksturing, cut&key, waiting file, articulate, revisi, rigging, pending, ready to send, rendering, coloring 3D Print, animation, waiting feedback, delivered, done, cancel.
+- ✅ Dashboard month filter (default current month) + per-platform breakdown.
+- ✅ Orders default filter = current month; done+past-month orders auto-hidden (archived).
+- ✅ Per-row "Buat Invoice" button → `/invoice?orderId=xxx` pre-selects that order.
+- ✅ Invoice page: search (project/klien/folder), multi-select candidates, per-project invoice.
+- ✅ Board: active columns + "Selesai bulan ini" separate section.
+- ✅ NEW Archive page (rekening koran, CSV export).
+- ✅ NEW Earning page: per-month + per-platform pivot with gross/fee/net.
+- ✅ NEW Freelance page: per-artist fee aggregation (fee dibagi rata).
+- ✅ Telegram reminder (replace Fonnte): `/api/settings/test-telegram` endpoint + live test button. Token & chat_id seeded from .env.
+- ✅ Tested 15/15 pytest + frontend Playwright 100% iter3 flows verified.
 
 ## Backlog (P0/P1/P2)
 - **P1**: Drag-and-drop kanban board (move card → update status)

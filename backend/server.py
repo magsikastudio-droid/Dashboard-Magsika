@@ -288,9 +288,18 @@ async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Dep
         or existing.get("tanggal") != update_data.get("tanggal")
         or existing.get("klien") != update_data.get("klien")
         or existing.get("project") != update_data.get("project")):
-        # remove current order from count
-        await db.orders.update_one({"id": order_id_uuid}, {"$set": {"platform": "__tmp__"}})
-        update_data["folder_code"] = await generate_folder_code(update_data["tanggal"], update_data["platform"], update_data["klien"], update_data["project"])
+        # exclude current order from the count via query filter (atomic, no tmp write)
+        date_compact = update_data["tanggal"].replace("-", "")[2:] if update_data.get("tanggal") else "000000"
+        code = PLATFORM_CODES.get(update_data.get("platform"), "ETC")
+        existing_count = await db.orders.count_documents({
+            "tanggal": update_data["tanggal"],
+            "platform": update_data["platform"],
+            "id": {"$ne": order_id_uuid},
+        })
+        seq = existing_count + 1
+        client_part = sanitize_upper(update_data.get("klien", "")).replace(" ", "")
+        project_part = sanitize_upper(update_data.get("project", ""))
+        update_data["folder_code"] = f"{date_compact}-{code}{seq:02d}-{client_part}-{project_part}"
     else:
         update_data["folder_code"] = existing.get("folder_code", "")
     await db.orders.update_one({"id": order_id_uuid}, {"$set": update_data})
