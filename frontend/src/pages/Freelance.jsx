@@ -347,10 +347,8 @@ function ProjectModal({ data, artistId, artists, onClose, onSaved }) {
     if (!f.project.trim()) { toast.error("Nama project wajib"); return; }
     setSaving(true);
     try {
-      const payload = { ...f };
-      delete payload.order_ref_id; // not stored in backend schema
-      if (data?.id) await api.put(`/freelance/projects/${data.id}`, payload);
-      else await api.post("/freelance/projects", payload);
+      if (data?.id) await api.put(`/freelance/projects/${data.id}`, f);
+      else await api.post("/freelance/projects", f);
       toast.success("Tersimpan");
       onSaved();
     } catch { toast.error("Gagal"); } finally { setSaving(false); }

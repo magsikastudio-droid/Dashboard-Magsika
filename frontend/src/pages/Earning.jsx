@@ -88,6 +88,13 @@ export default function Earning() {
     return Object.entries(table).sort((a, b) => b[0].localeCompare(a[0]));
   }, [data]);
 
+  // Dynamic platform list from actual earnings data (includes user-added platforms)
+  const allPlatforms = useMemo(() => {
+    const s = new Set(data.by_platform_month.map((r) => r.platform));
+    PLATFORM_OPTIONS.forEach((p) => s.add(p));
+    return Array.from(s).sort();
+  }, [data]);
+
   if (loading) return <div className="text-center py-10 text-[var(--ms-text-muted)]">Memuat...</div>;
 
   return (
@@ -119,7 +126,7 @@ export default function Earning() {
           cur={cur} prev={prev} month={month}
           fmt={fmt} cv={cv} cvIdr={cvIdr} display={display} convert={convert}
           trend={trend} series={series} seriesMax={seriesMax}
-          months={months} pivot={pivot}
+          months={months} pivot={pivot} allPlatforms={allPlatforms}
         />
       )}
       {tab === "weekly" && (
@@ -130,7 +137,7 @@ export default function Earning() {
 }
 
 /* ============ MONTHLY ============ */
-function MonthlyTab({ cur, prev, month, fmt, cv, cvIdr, display, convert, trend, series, seriesMax, months, pivot }) {
+function MonthlyTab({ cur, prev, month, fmt, cv, cvIdr, display, convert, trend, series, seriesMax, months, pivot, allPlatforms }) {
   return (
     <>
       {/* Stat cards */}
@@ -229,21 +236,21 @@ function MonthlyTab({ cur, prev, month, fmt, cv, cvIdr, display, convert, trend,
             <thead className="bg-[var(--ms-bg)]">
               <tr className="text-left">
                 <th className="px-4 py-3 text-[0.66rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)]">Bulan</th>
-                {PLATFORM_OPTIONS.map((p) => <th key={p} className="px-4 py-3 text-[0.66rem] uppercase tracking-wider font-bold font-mono text-right" style={{ color: PLATFORM_COLORS[p] }}>{PLATFORM_SHORT[p] || p}</th>)}
+                {allPlatforms.map((p) => <th key={p} className="px-4 py-3 text-[0.66rem] uppercase tracking-wider font-bold font-mono text-right" style={{ color: PLATFORM_COLORS[p] || "#6d4cff" }}>{PLATFORM_SHORT[p] || p}</th>)}
                 <th className="px-4 py-3 text-[0.66rem] uppercase tracking-wider font-bold font-mono text-right" style={{ color: "var(--ms-primary)" }}>Total</th>
               </tr>
             </thead>
             <tbody data-testid="earn-pivot">
-              {pivot.length === 0 && <tr><td colSpan={7} className="text-center py-8 text-[var(--ms-text-muted)]">—</td></tr>}
+              {pivot.length === 0 && <tr><td colSpan={allPlatforms.length + 2} className="text-center py-8 text-[var(--ms-text-muted)]">—</td></tr>}
               {pivot.map(([mm, row]) => {
-                const rawTotal = PLATFORM_OPTIONS.reduce((s, p) => s + (row[p] || 0), 0);
+                const rawTotal = allPlatforms.reduce((s, p) => s + (row[p] || 0), 0);
                 return (
                   <tr key={mm} className="border-t border-[var(--ms-border)] hover:bg-[var(--ms-bg)] align-top">
                     <td className="px-4 py-3 font-semibold whitespace-nowrap">
                       {monthLabel(mm)}
                       {mm === currentMonth() && <span className="ml-2 text-[0.62rem] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">Skrg</span>}
                     </td>
-                    {PLATFORM_OPTIONS.map((p) => {
+                    {allPlatforms.map((p) => {
                       const val = row[p] || 0;
                       const pct = rawTotal ? (val / rawTotal) * 100 : 0;
                       return (

@@ -1,0 +1,45 @@
+{
+  "summary": "Iter7 testing complete: 7/7 backend pytest pass + all 3 frontend flows (OrderModal grid layout, Settings telegram templates, Earning custom-platform pivot) verified. (1) Auto freelance_projects sync VERIFIED: POST /api/orders with ['Tim','Freelance'] auto-created artist 'Artisto Iter7B' + freelance_project linked by order_ref_id, fee=800000, all order-driven fields (project, platform, tanggal, pic, status_project) correctly populated, pembayaran fields blank (dp_amount=0, status_bayar='unpaid'). (2) PUT /api/orders idempotent update VERIFIED: After user edits pembayaran (dp_amount=200000, dp_date='2026-05-05', status_bayar='paid'), updating the order changes only project/platform/tanggal/fee on linked project — dp_amount/dp_date/pelunasan_date/status_bayar preserved exactly. (3) settings.telegram_templates persist via PUT /api/settings → GET returns same dict. (4) render_tg_template fallback VERIFIED: with templates={'new':'BROKEN {unknown_var}'}, notify endpoint returns 400 'Telegram belum dikonfigurasi' (blank creds) — no 500 from KeyError. (5) /api/earnings regression: base_currency=USD, exchange_rate=16000, by_platform_month includes new custom platform 'Iter7CustomPlatform' after order creation, all nets within reasonable bounds. (6) FRONTEND OrderModal: artist-row-0 is grid 'auto 1fr 110px auto' — input width=470px, select width=110px exactly as spec. Fill 'TestName' + select 'Freelance' both work. Screenshot confirms Artist 1 badge, wide name input, narrow Tim/Freelance dropdown, no layout collapse. (7) FRONTEND Settings: telegram-templates-section renders with 4 textareas (tg-template-new/reminder/warning/custom), all pre-populated with defaults (145-173 chars each). Edited 'new' to 'IterTestPersist {project}', clicked Simpan Settings, reloaded page → textarea still shows edited value (persist OK). Clicked reset-tg-new → textarea reverted to default ('ORDER BARU MASUK...', 145 chars). Data cleanup: all 4 Iter7 orders (ClientCreate/ClientU/NotifyClient/CustomPlat), 4 Iter7 artists, 4 linked freelance_projects all deleted by pytest teardown. Telegram creds restored to chat_id=-1003611845591 + token, telegram_templates={}.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "_sync_freelance_artists", "issue": "Still swallows all exceptions silently via try/except broad — if project schema drifts the log warning is the only signal. Consider re-raising in dev/test mode."},
+      {"endpoint": "POST /api/orders", "issue": "send_telegram still sync-inline (timeout=15s) — same concern flagged in Iter6. Not blocking Iter7."},
+      {"endpoint": "PUT /api/orders", "issue": "When order-level artist_statuses changes from Freelance→Tim for an artist, the existing linked freelance_project is NOT deleted/marked inactive. Orphan projects will linger if user flips status back. Consider reconciliation."},
+      {"endpoint": "render_tg_template", "issue": "Uses bare .format with unknown-placeholder safety net, but if template contains a positional {} it will still raise IndexError which is caught and falls back — verified working but not explicitly tested."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Settings Template editor", "issues": ["Textareas use whitespace-pre font-mono which is fine, but height is fixed (6 lines) → for the 'custom' template (multi-line) user may need to scroll inside textarea. Minor UX — not blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter7.py",
+    "/app/test_reports/pytest/iter7_results.xml"
+  ],
+  "action_items": [
+    "Consider reconciliation when PUT /api/orders removes an artist's 'Freelance' flag — the existing linked freelance_projects record should be deleted or archived (currently orphaned with stale order_ref_id).",
+    "Optional: apply existing Iter6 backlog items (BackgroundTasks for telegram, per-order exchange-rate snapshot)."
+  ],
+  "critical_code_review_comments": [
+    "server.py render_tg_template line 113-120: fallback is safe but the try/except catches ALL Exception — a typo in the *default* template (e.g. positional {}) would also be silently swallowed into empty default. Scope except to (KeyError, IndexError) for better signal.",
+    "server.py _sync_freelance_artists line 358: find uses {order_ref_id, artist_id}. If an admin later deletes the freelance_artist, the linked project still has stale artist_id pointing nowhere. Consider cascade cleanup or nullable artist_id with soft-ref.",
+    "server.py _sync_freelance_artists line 333: fee split equally across freelancers is fair, but if `order.fee_freelance` is 0 then projects are created with fee=0 — they still count toward freelance dashboard. Acceptable but worth documenting.",
+    "Settings.jsx Template editor: no client-side validation that placeholder names match the known vars ({project, klien, folder_code, deadline, days_left}). Users can save broken templates; backend fallback handles this, but a UI warning would be nicer UX.",
+    "OrderModal.jsx line 214: grid-template-columns hardcoded inline style — consider extracting to Tailwind arbitrary-value class for consistency with rest of codebase."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7.py"
+  ],
+  "success_rate": {"backend": "100% (7/7 iter7 pytest)", "frontend": "100% — OrderModal grid layout verified (input=470px/select=110px), 4 telegram template textareas present with defaults, edit-persist-reload-reset flow works end-to-end, custom-platform pivot column verified via backend assert"},
+  "test_credentials": "Seeded admin token sess_admin_iter7_1777810295322 (admin.iter7@magsika.test, role=admin). Bearer header + session_token cookie both work.",
+  "seed_data_creation": "Created during tests and CLEANED UP: 4 Iter7 orders (Iter7Test Client, Iter7Test Client U, Iter7Test NotifyClient, Iter7Test CustomPlat), 4 Iter7 artists (Artisto Iter7A/B/C + SoloCustomArtist/SoloNotifyArtist), 4 linked freelance_projects. Post-run verification: 0 Iter7/Iter6/UITest residue in orders/artists/projects. Telegram settings restored to original token + chat_id=-1003611845591 + telegram_templates={}.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter7 production-ready. To re-run: mongosh snippet in /app/memory/test_credentials.md for fresh admin token, then pytest /app/backend/tests/test_iter7.py with ITER7_TOKEN env. Module-scoped autouse fixture blanks telegram creds before tests + restores after; if fixture teardown fails (e.g. pytest aborted), manually PUT /api/settings with real token+chat_id+telegram_templates={}. freelance_projects GET/POST/PUT/DELETE all support order_ref_id field — old records without it return '' which is fine. render_tg_template fallback is tested via invalid placeholder + blank creds (400 path); to test with real templates, use valid {project}/{klien}/{folder_code}/{deadline}/{days_left}.",
+  "rca of the issue": "n/a — no blockers. All 4 Iter7 specs (OrderModal grid layout, auto freelance_projects creation+idempotent update with pembayaran preservation, editable telegram templates with render fallback, dynamic Earning pivot platforms) verified end-to-end backend + frontend."
+}

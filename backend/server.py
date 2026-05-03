@@ -103,6 +103,23 @@ class OrderInput(BaseModel):
     folder_code_manual: bool = False
     fee_freelance: float = 0
 
+DEFAULT_TG_TEMPLATES = {
+    "new": "🆕 ORDER BARU MASUK\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n🚀 Silakan segera diproses.",
+    "reminder": "⏰ REMINDER DEADLINE\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n⚠️ Deadline sudah semakin dekat, segera diselesaikan.",
+    "warning": "❗ WARNING DEADLINE H-1\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n🚨 Deadline BESOK! Pastikan selesai tepat waktu!",
+    "custom": "⏳ REMINDER DEADLINE\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n⚠️ Deadline tersisa {days_left} hari lagi!",
+}
+
+def render_tg_template(settings_doc: dict, kind: str, vars: dict) -> str:
+    """Render Telegram message template with safe fallback to defaults on KeyError."""
+    templates = (settings_doc or {}).get("telegram_templates") or {}
+    tpl = templates.get(kind) or DEFAULT_TG_TEMPLATES.get(kind, "")
+    try:
+        return tpl.format(**{"project": "", "klien": "", "folder_code": "", "deadline": "", "days_left": "", **vars})
+    except Exception:
+        return DEFAULT_TG_TEMPLATES.get(kind, "").format(**{"project": "", "klien": "", "folder_code": "", "deadline": "", "days_left": "", **vars})
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     allowed_emails: List[str] = []
@@ -110,6 +127,7 @@ class Settings(BaseModel):
     telegram_chat_id: str = ""
     reminders_enabled: bool = True
     exchange_rate: float = 16000  # IDR per USD
+    telegram_templates: dict = {}
 
 class SettingsInput(BaseModel):
     allowed_emails: List[str] = []
@@ -117,6 +135,7 @@ class SettingsInput(BaseModel):
     telegram_chat_id: str = ""
     reminders_enabled: bool = True
     exchange_rate: float = 16000
+    telegram_templates: dict = {}
 
 class ReassignInput(BaseModel):
     artists: Optional[List[str]] = None
@@ -292,35 +311,39 @@ async def create_order(payload: OrderInput, user: User = Depends(get_current_use
         token = s.get("telegram_bot_token", "")
         chat_id = s.get("telegram_chat_id", "")
         if token and chat_id:
-            msg = (
-                f"🆕 ORDER BARU MASUK\n\n"
-                f"📁 Project   : {order.project}\n"
-                f"👤 Client    : {order.klien}\n"
-                f"📂 Folder    : {order.folder_code}\n"
-                f"📅 Deadline  : {order.deadline}\n"
-                f"🚀 Silakan segera diproses."
-            )
+            msg = render_tg_template(s, "new", {
+                "project": order.project, "klien": order.klien,
+                "folder_code": order.folder_code, "deadline": order.deadline,
+            })
             send_telegram(token, chat_id, msg)
     except Exception as e:
         logger.warning(f"auto new-order telegram failed: {e}")
     return order
 
 async def _sync_freelance_artists(order: "Order"):
-    """For each artist flagged 'Freelance' in the order, ensure a freelance_artists record exists."""
+    """For each artist flagged 'Freelance' in the order:
+    - ensure a freelance_artists record exists
+    - ensure a freelance_projects record exists linked (order_ref_id == order.id) for that artist
+      Fee is split equally among all Freelance-flagged artists of the order.
+    """
     try:
+        import re
         artists = order.artists or []
         statuses = order.artist_statuses or []
-        for i, name in enumerate(artists):
-            if i >= len(statuses):
-                break
-            if (statuses[i] or "").lower() != "freelance":
-                continue
-            name = (name or "").strip()
-            if not name:
-                continue
-            existing = await db.freelance_artists.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}}, {"_id": 0})
-            if not existing:
-                new_doc = {
+        freelancers = [(n or "").strip() for i, n in enumerate(artists) if i < len(statuses) and (statuses[i] or "").lower() == "freelance" and (n or "").strip()]
+        if not freelancers:
+            return
+        per_artist_fee = (float(order.fee_freelance or 0) / len(freelancers)) if freelancers else 0.0
+        # Map order status → project status
+        done_statuses = {"done", "delivered", "cancel", "cancle"}
+        proj_status = "done" if (order.status or "").lower() in done_statuses else "in_progress"
+
+        for name in freelancers:
+            # 1) ensure artist
+            safe = re.escape(name)
+            artist_doc = await db.freelance_artists.find_one({"name": {"$regex": f"^{safe}$", "$options": "i"}}, {"_id": 0})
+            if not artist_doc:
+                artist_doc = {
                     "id": str(uuid.uuid4()),
                     "name": name,
                     "bank": "BCA",
@@ -329,8 +352,36 @@ async def _sync_freelance_artists(order: "Order"):
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "auto_created": True,
                 }
-                await db.freelance_artists.insert_one(new_doc)
+                await db.freelance_artists.insert_one(artist_doc)
                 logger.info(f"Auto-created freelance artist: {name}")
+            # 2) ensure project record linked to this order
+            existing_proj = await db.freelance_projects.find_one({"order_ref_id": order.id, "artist_id": artist_doc["id"]}, {"_id": 0})
+            proj_data = {
+                "artist_id": artist_doc["id"],
+                "order_ref_id": order.id,
+                "tanggal": order.tanggal or "",
+                "project": order.project or "",
+                "pic": order.marketer or "",
+                "status_project": proj_status,
+                "platform": order.platform or "",
+                "fee": round(per_artist_fee),
+            }
+            if existing_proj:
+                # update only order-driven fields, preserve pembayaran fields (dp/status_bayar/etc)
+                await db.freelance_projects.update_one({"id": existing_proj["id"]}, {"$set": proj_data})
+            else:
+                new_proj = {
+                    "id": str(uuid.uuid4()),
+                    **proj_data,
+                    "dp_amount": 0,
+                    "dp_date": "",
+                    "pelunasan_date": "",
+                    "status_bayar": "unpaid",
+                    "auto_created": True,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await db.freelance_projects.insert_one(new_proj)
+                logger.info(f"Auto-created freelance project for {name}: {order.project}")
     except Exception as e:
         logger.warning(f"freelance sync error: {e}")
 
@@ -388,24 +439,16 @@ async def notify_order(order_id_uuid: str, payload: NotifyInput, user: User = De
         days_left = max(0, (deadline_dt - datetime.now(timezone.utc)).days)
     except Exception:
         days_left = "?"
-    common = (
-        f"📁 Project   : {o['project']}\n"
-        f"👤 Client    : {o['klien']}\n"
-        f"📂 Folder    : {o.get('folder_code','')}\n"
-        f"📅 Deadline  : {o['deadline']}\n"
-    )
+    common_vars = {
+        "project": o["project"],
+        "klien": o["klien"],
+        "folder_code": o.get("folder_code", ""),
+        "deadline": o["deadline"],
+        "days_left": days_left,
+    }
     t = payload.type
-    if t == "new":
-        msg = f"🆕 ORDER BARU MASUK\n\n{common}🚀 Silakan segera diproses."
-    elif t == "warning":
-        # H-1
-        msg = f"❗ WARNING DEADLINE H-1\n\n{common}🚨 Deadline BESOK! Pastikan selesai tepat waktu!"
-    elif t == "reminder":
-        # <5 hari & <3 hari (recipient sees the same template, days_left differentiates)
-        msg = f"⏰ REMINDER DEADLINE\n\n{common}⚠️ Deadline sudah semakin dekat, segera diselesaikan."
-    else:
-        # custom: manual ping with sisa_hari
-        msg = f"⏳ REMINDER DEADLINE\n\n{common}⚠️ Deadline tersisa {days_left} hari lagi!"
+    kind = t if t in ("new", "reminder", "warning", "custom") else "custom"
+    msg = render_tg_template(s, kind, common_vars)
     ok = send_telegram(token, chat_id, msg)
     if not ok:
         raise HTTPException(500, "Gagal kirim Telegram")
@@ -582,6 +625,7 @@ class FreelanceProjectInput(BaseModel):
     dp_date: str = ""
     pelunasan_date: str = ""
     status_bayar: str = "unpaid"  # "paid" | "unpaid" | "dp_only"
+    order_ref_id: str = ""
 
 @api_router.get("/freelance/artists")
 async def list_freelance_artists(user: User = Depends(get_current_user)):
@@ -724,17 +768,15 @@ async def reminder_loop():
                     sent = await db.sent_reminders.find_one({"_id": key})
                     if sent:
                         continue
-                    common = (
-                        f"📁 Project   : {o['project']}\n"
-                        f"👤 Client    : {o['klien']}\n"
-                        f"📂 Folder    : {o.get('folder_code','')}\n"
-                        f"📅 Deadline  : {o['deadline']}\n"
-                    )
-                    if label == "1d":
-                        msg = f"❗ WARNING DEADLINE H-1\n\n{common}🚨 Deadline BESOK! Pastikan selesai tepat waktu!"
-                    else:
-                        # 5d or 3d: same REMINDER DEADLINE template
-                        msg = f"⏰ REMINDER DEADLINE\n\n{common}⚠️ Deadline sudah semakin dekat, segera diselesaikan."
+                    vars_ = {
+                        "project": o['project'],
+                        "klien": o['klien'],
+                        "folder_code": o.get('folder_code', ''),
+                        "deadline": o['deadline'],
+                        "days_left": threshold.days,
+                    }
+                    kind = "warning" if label == "1d" else "reminder"
+                    msg = render_tg_template(settings_doc, kind, vars_)
                     ok = send_telegram(token, chat_id, msg)
                     if ok:
                         await db.sent_reminders.insert_one({"_id": key, "sent_at": now.isoformat()})

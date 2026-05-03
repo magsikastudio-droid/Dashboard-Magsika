@@ -211,13 +211,15 @@ export default function OrderModal({ open, onClose, order }) {
             <div className={sectionH} style={{ color: "var(--ms-primary)" }}>👤 Tim Artist</div>
             <div className="space-y-2">
               {form.artists.map((a, i) => (
-                <div key={i} className="flex gap-2 items-center" data-testid={`artist-row-${i}`}>
-                  <span className="text-[0.68rem] font-mono font-bold flex-shrink-0 px-2.5 py-1 rounded-full bg-[var(--ms-primary-soft)] whitespace-nowrap" style={{ color: "var(--ms-primary)" }}>Artist&nbsp;{i + 1}</span>
-                  <input className={inp + " flex-1 min-w-0"} placeholder="Nama artist" value={a} onChange={(e) => setArtist(i, e.target.value)} data-testid={`input-artist-${i}`} />
-                  <select className={inp + " w-24 flex-shrink-0"} value={form.artist_statuses[i] || "Tim"} onChange={(e) => setArtistStatus(i, e.target.value)} data-testid={`select-artist-status-${i}`}>
+                <div key={i} className="grid gap-2 items-center" style={{ gridTemplateColumns: "auto 1fr 110px auto" }} data-testid={`artist-row-${i}`}>
+                  <span className="text-[0.68rem] font-mono font-bold px-2.5 py-1 rounded-full bg-[var(--ms-primary-soft)] whitespace-nowrap" style={{ color: "var(--ms-primary)" }}>Artist&nbsp;{i + 1}</span>
+                  <input className={inp + " min-w-0"} placeholder="Nama artist" value={a} onChange={(e) => setArtist(i, e.target.value)} data-testid={`input-artist-${i}`} />
+                  <select className={inp} value={form.artist_statuses[i] || "Tim"} onChange={(e) => setArtistStatus(i, e.target.value)} data-testid={`select-artist-status-${i}`}>
                     {ARTIST_STATUS_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
-                  {form.artists.length > 1 && <button onClick={() => removeArtist(i)} className="p-2 rounded-lg hover:bg-rose-50 text-rose-600 flex-shrink-0" data-testid={`remove-artist-${i}`}><Trash2 size={14} /></button>}
+                  {form.artists.length > 1 ? (
+                    <button onClick={() => removeArtist(i)} className="p-2 rounded-lg hover:bg-rose-50 text-rose-600" data-testid={`remove-artist-${i}`}><Trash2 size={14} /></button>
+                  ) : <span className="w-8" />}
                 </div>
               ))}
               <button onClick={addArtist} className="w-full py-2 rounded-xl border-2 border-dashed border-[var(--ms-border)] text-sm font-semibold text-[var(--ms-text-muted)] hover:border-[var(--ms-primary)] hover:text-[var(--ms-primary)] transition-base flex items-center justify-center gap-1.5" data-testid="add-artist-btn">

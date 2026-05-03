@@ -1,12 +1,20 @@
 import React, { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Save, Plus, X, Mail, Bell, ShieldCheck, Users, Send, TestTube } from "lucide-react";
+import { Settings as SettingsIcon, Save, Plus, X, Mail, Bell, ShieldCheck, Users, TestTube, MessageSquare, RotateCcw } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 
+const DEFAULT_TG_TEMPLATES = {
+  new: "🆕 ORDER BARU MASUK\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n🚀 Silakan segera diproses.",
+  reminder: "⏰ REMINDER DEADLINE\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n⚠️ Deadline sudah semakin dekat, segera diselesaikan.",
+  warning: "❗ WARNING DEADLINE H-1\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n🚨 Deadline BESOK! Pastikan selesai tepat waktu!",
+  custom: "⏳ REMINDER DEADLINE\n\n📁 Project   : {project}\n👤 Client    : {klien}\n📂 Folder    : {folder_code}\n📅 Deadline  : {deadline}\n⚠️ Deadline tersisa {days_left} hari lagi!",
+};
+const TG_LABELS = { new: "🆕 Order Baru", reminder: "⏰ Reminder <5 & <3 Hari", warning: "❗ Warning H-1", custom: "⏳ Manual Ping / Sisa Hari" };
+
 export default function Settings() {
   const { user } = useAuth();
-  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", reminders_enabled: true });
+  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", reminders_enabled: true, telegram_templates: {} });
   const [users, setUsers] = useState([]);
   const [newEmail, setNewEmail] = useState("");
   const [saving, setSaving] = useState(false);
@@ -125,6 +133,37 @@ export default function Settings() {
           <button onClick={testTelegram} disabled={testing || !settings.telegram_bot_token || !settings.telegram_chat_id} className="flex items-center gap-2 px-4 py-2 rounded-full border border-[var(--ms-border)] text-sm font-semibold hover:bg-[var(--ms-bg)] disabled:opacity-50 transition-base" data-testid="test-telegram-btn">
             <TestTube size={14} /> {testing ? "Mengirim..." : "Kirim Pesan Test"}
           </button>
+        </div>
+      </section>
+
+      {/* Template editor */}
+      <section className="bg-white rounded-2xl border border-[var(--ms-border)] p-6" data-testid="telegram-templates-section">
+        <div className="flex items-center gap-2.5 mb-1"><MessageSquare size={16} style={{ color: "var(--ms-primary)" }} /><h2 className="font-display text-xl font-bold">Template Pesan Telegram</h2></div>
+        <p className="text-sm text-[var(--ms-text-muted)] mb-4">Edit format pesan yang dikirim. Variabel yang tersedia: <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{project}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{klien}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{folder_code}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{deadline}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{days_left}"}</code> (hanya untuk custom).</p>
+        <div className="space-y-4" data-testid="tg-templates-editor">
+          {Object.keys(DEFAULT_TG_TEMPLATES).map((k) => {
+            const val = settings.telegram_templates?.[k] ?? DEFAULT_TG_TEMPLATES[k];
+            const isCustom = (settings.telegram_templates?.[k] ?? "") !== "" && settings.telegram_templates?.[k] !== DEFAULT_TG_TEMPLATES[k];
+            return (
+              <div key={k}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className={lbl + " mb-0"}>{TG_LABELS[k]}</label>
+                  {isCustom && (
+                    <button onClick={() => setSettings({ ...settings, telegram_templates: { ...settings.telegram_templates, [k]: DEFAULT_TG_TEMPLATES[k] } })} className="flex items-center gap-1 text-[0.68rem] font-semibold hover:underline" style={{ color: "var(--ms-primary)" }} data-testid={`reset-tg-${k}`}>
+                      <RotateCcw size={10} /> Reset default
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  className={inp + " font-mono text-[0.8rem] leading-relaxed"}
+                  rows={6}
+                  value={val}
+                  onChange={(e) => setSettings({ ...settings, telegram_templates: { ...settings.telegram_templates, [k]: e.target.value } })}
+                  data-testid={`tg-template-${k}`}
+                />
+              </div>
+            );
+          })}
         </div>
       </section>
 
