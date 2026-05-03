@@ -36,6 +36,19 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - Telegram reminder loop + test endpoint
 - Archive page
 
+## Implemented (iter 6 — Tier 2 fixes, 2026-05-02) ✅
+- ✅ POST /api/orders auto-sends Telegram "🆕 ORDER BARU MASUK" notification on create
+- ✅ POST/PUT /api/orders auto-creates `freelance_artists` record for any artist flagged "Freelance" (case-insensitive name match → no duplicate)
+- ✅ /api/earnings normalizes ALL amounts to USD base (uses settings.exchange_rate). Returns `{base_currency:'USD', exchange_rate, by_month, by_platform_month}`. Fixed massive negative net bug from mixed currency summation.
+- ✅ OrderModal artist row layout: name input `flex-1 min-w-0`, Tim/Freelance dropdown trimmed to `w-24`. No more cramped name field / oversized dropdown.
+- ✅ OrderModal Fee Freelance: shows %-of-order chip with color coding (green ≤30% / amber 30-40% / red >40%) — quick guard rail
+- ✅ Freelance ProjectModal:
+  - Now portal-rendered (fixes blur bug)
+  - Split into "📁 Info Project" + "💰 Pembayaran" sections (sama style dgn OrderModal)
+  - "Link ke Order" picker — list/search order yang punya artist sebagai Freelance → click → auto-fill project / platform / pic / tanggal / fee (split per-artist)
+- ✅ Earning page: removed `guessCur` heuristic, all values formatted USD-base via `convert(n, 'USD')`
+- ✅ Tested 7/7 pytest + 11/11 UI checkpoints
+
 ## Implemented (iter 5 — Tier 2, 2026-05-02) ✅
 - ✅ Telegram CHAT_ID updated to `-1003611845591` (group chat) in backend/.env + db.settings
 - ✅ Dashboard labels: "Net (— Fee)" → "Fee Freelance", "Belum Dibayar" → "Pending Payment"
