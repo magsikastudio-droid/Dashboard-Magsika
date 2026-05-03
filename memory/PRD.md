@@ -36,6 +36,14 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - Telegram reminder loop + test endpoint
 - Archive page
 
+## Implemented (iter 7 — Tier 2 fixes 2, 2026-05-03) ✅
+- ✅ OrderModal artist row layout FIXED — changed flex → CSS grid `auto 1fr 110px auto` (badge | name | dropdown | delete). Name input 470px wide, dropdown 110px, no more collapsed input.
+- ✅ Freelance auto-sync EXTENDED — POST/PUT /api/orders now not only auto-creates `freelance_artists` but also auto-creates `freelance_projects` (linked via `order_ref_id=order.id`). Fee split evenly across Freelance artists. On PUT order update, order-driven fields (project, platform, tanggal, pic, status_project, fee) are refreshed but pembayaran fields (dp_amount, dp_date, pelunasan_date, status_bayar) are preserved (user-editable).
+- ✅ Editable Telegram templates — `settings.telegram_templates` dict with keys new|reminder|warning|custom. Backend `render_tg_template()` renders with safe fallback. Settings page has new "Template Pesan Telegram" section with 4 textareas + per-template "Reset default" button.
+- ✅ Earning per-platform pivot — `allPlatforms` dynamic from actual data (not hardcoded PLATFORM_OPTIONS), so new user-added platforms auto-appear as columns.
+- ✅ FreelanceProjectInput schema extended with `order_ref_id` field.
+- ✅ Tested 7/7 pytest + 3/3 frontend E2E checkpoints pass.
+
 ## Implemented (iter 6 — Tier 2 fixes, 2026-05-02) ✅
 - ✅ POST /api/orders auto-sends Telegram "🆕 ORDER BARU MASUK" notification on create
 - ✅ POST/PUT /api/orders auto-creates `freelance_artists` record for any artist flagged "Freelance" (case-insensitive name match → no duplicate)
