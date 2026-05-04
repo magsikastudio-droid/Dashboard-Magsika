@@ -8,8 +8,10 @@ import uuid
 import asyncio
 import re
 import requests
+import bcrypt
+import secrets
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import List, Optional, Set
 from datetime import datetime, timezone, timedelta
 
@@ -58,7 +60,9 @@ class User(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
-    role: str = "member"
+    role: str = "talent"  # admin | pm | talent
+    status: str = "active"  # active | pending | disabled
+    auth_provider: str = "google"  # google | password | both
 
 class Order(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -144,6 +148,17 @@ class ReassignInput(BaseModel):
     status: Optional[str] = None
 
 # ---------- Auth helpers ----------
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def verify_password(pw: str, hashed: str) -> bool:
+    if not hashed:
+        return False
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
 async def get_current_user(request: Request) -> User:
     token = request.cookies.get("session_token")
     if not token:
@@ -165,11 +180,26 @@ async def get_current_user(request: Request) -> User:
     user_doc = await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0})
     if not user_doc:
         raise HTTPException(status_code=401, detail="User not found")
+    # migrate legacy role values
+    role = user_doc.get("role") or "talent"
+    if role == "member":
+        role = "pm"
+    user_doc["role"] = role
+    user_doc.setdefault("status", "active")
+    if user_doc.get("status") == "disabled":
+        raise HTTPException(status_code=403, detail="Akun dinonaktifkan")
+    if user_doc.get("status") == "pending":
+        raise HTTPException(status_code=403, detail="Akun belum disetujui admin")
     return User(**user_doc)
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+async def require_admin_or_pm(user: User = Depends(get_current_user)) -> User:
+    if user.role not in ("admin", "pm"):
+        raise HTTPException(status_code=403, detail="Admin/PM only")
     return user
 
 # ---------- WS Manager ----------
@@ -240,15 +270,25 @@ async def auth_session(request: Request, response: Response):
 
     if not has_admin:
         role = "admin"
+        status = "active"
     elif allowed and email not in allowed and not await db.users.find_one({"email": email, "role": "admin"}, {"_id": 0}):
         raise HTTPException(status_code=403, detail=f"Email {email} tidak diizinkan. Hubungi admin untuk akses.")
     else:
-        role = "member"
+        role = "talent"
+        status = "active"  # Google sign-in trusted if whitelisted
 
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         user_id = existing["user_id"]
         new_role = existing.get("role") or role
+        if new_role == "member":
+            new_role = "pm"
+        # enforce status on re-login
+        cur_status = existing.get("status", "active")
+        if cur_status == "disabled":
+            raise HTTPException(status_code=403, detail="Akun dinonaktifkan")
+        if cur_status == "pending":
+            raise HTTPException(status_code=403, detail="Akun belum disetujui admin")
         await db.users.update_one({"user_id": user_id}, {"$set": {
             "name": data.get("name", existing.get("name")),
             "picture": data.get("picture", existing.get("picture")),
@@ -262,6 +302,8 @@ async def auth_session(request: Request, response: Response):
             "name": data.get("name", ""),
             "picture": data.get("picture", ""),
             "role": role,
+            "status": status,
+            "auth_provider": "google",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -286,6 +328,171 @@ async def auth_logout(request: Request, response: Response):
     if token:
         await db.user_sessions.delete_one({"session_token": token})
     response.delete_cookie("session_token", path="/", samesite="none", secure=True)
+    return {"ok": True}
+
+# ---------- Email/Password auth ----------
+class RegisterInput(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+class LoginInput(BaseModel):
+    email: str
+    password: str
+
+class InviteInput(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+    role: str = "talent"  # admin | pm | talent
+
+async def _issue_session(user_id: str, response: Response) -> str:
+    session_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    response.set_cookie(key="session_token", value=session_token, httponly=True, secure=True, samesite="none", path="/", max_age=7 * 24 * 60 * 60)
+    return session_token
+
+@api_router.post("/auth/register")
+async def auth_register(payload: RegisterInput):
+    email = (payload.email or "").lower().strip()
+    if not email or not payload.password or len(payload.password) < 6:
+        raise HTTPException(400, "Email & password (min 6 karakter) wajib")
+    if await db.users.find_one({"email": email}, {"_id": 0}):
+        raise HTTPException(400, "Email sudah terdaftar")
+    # First user becomes admin + active, otherwise pending
+    has_admin = await db.users.find_one({"role": "admin"}, {"_id": 0})
+    role = "admin" if not has_admin else "talent"
+    status = "active" if not has_admin else "pending"
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.insert_one({
+        "user_id": user_id,
+        "email": email,
+        "name": payload.name or email.split("@")[0],
+        "picture": "",
+        "password_hash": hash_password(payload.password),
+        "role": role,
+        "status": status,
+        "auth_provider": "password",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"user_id": user_id, "email": email, "role": role, "status": status, "message": "Berhasil mendaftar" + ("" if status == "active" else ". Tunggu persetujuan admin.")}
+
+@api_router.post("/auth/login")
+async def auth_login(payload: LoginInput, request: Request, response: Response):
+    email = (payload.email or "").lower().strip()
+    # brute force throttle (simple): max 5 fails in 15min by email+ip
+    ip = request.client.host if request.client else "unknown"
+    key = f"{ip}::{email}"
+    now = datetime.now(timezone.utc)
+    attempts_doc = await db.login_attempts.find_one({"_id": key}) or {}
+    fails = attempts_doc.get("fails", [])
+    fails = [f for f in fails if datetime.fromisoformat(f) > now - timedelta(minutes=15)]
+    if len(fails) >= 5:
+        raise HTTPException(429, "Terlalu banyak percobaan gagal. Coba lagi dalam 15 menit.")
+
+    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user_doc or not verify_password(payload.password, user_doc.get("password_hash", "")):
+        fails.append(now.isoformat())
+        await db.login_attempts.update_one({"_id": key}, {"$set": {"fails": fails}}, upsert=True)
+        raise HTTPException(401, "Email atau password salah")
+
+    status = user_doc.get("status", "active")
+    if status == "pending":
+        raise HTTPException(403, "Akun belum disetujui admin")
+    if status == "disabled":
+        raise HTTPException(403, "Akun dinonaktifkan")
+
+    await db.login_attempts.delete_one({"_id": key})
+    user_id = user_doc["user_id"]
+    await _issue_session(user_id, response)
+    role = user_doc.get("role") or "talent"
+    if role == "member":
+        role = "pm"
+    return {"user_id": user_id, "email": user_doc["email"], "name": user_doc.get("name", ""), "picture": user_doc.get("picture", ""), "role": role, "status": status}
+
+@api_router.post("/auth/invite")
+async def auth_invite(payload: InviteInput, admin: User = Depends(require_admin)):
+    email = (payload.email or "").lower().strip()
+    if not email or not payload.password or len(payload.password) < 6:
+        raise HTTPException(400, "Email & password (min 6 karakter) wajib")
+    if payload.role not in ("admin", "pm", "talent"):
+        raise HTTPException(400, "Role tidak valid")
+    if await db.users.find_one({"email": email}, {"_id": 0}):
+        raise HTTPException(400, "Email sudah terdaftar")
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.insert_one({
+        "user_id": user_id,
+        "email": email,
+        "name": payload.name or email.split("@")[0],
+        "picture": "",
+        "password_hash": hash_password(payload.password),
+        "role": payload.role,
+        "status": "active",
+        "auth_provider": "password",
+        "invited_by": admin.email,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"user_id": user_id, "email": email, "role": payload.role, "status": "active"}
+
+# ---------- User management (admin only) ----------
+class UserPatch(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    status: Optional[str] = None
+    password: Optional[str] = None
+
+@api_router.get("/users")
+async def list_users(admin: User = Depends(require_admin)):
+    docs = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+    for d in docs:
+        if d.get("role") == "member":
+            d["role"] = "pm"
+        d.setdefault("status", "active")
+        d.setdefault("auth_provider", "google")
+    return docs
+
+@api_router.patch("/users/{user_id}")
+async def patch_user(user_id: str, payload: UserPatch, admin: User = Depends(require_admin)):
+    existing = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "User not found")
+    upd = {}
+    if payload.name is not None:
+        upd["name"] = payload.name
+    if payload.role is not None:
+        if payload.role not in ("admin", "pm", "talent"):
+            raise HTTPException(400, "Role tidak valid")
+        upd["role"] = payload.role
+    if payload.status is not None:
+        if payload.status not in ("active", "pending", "disabled"):
+            raise HTTPException(400, "Status tidak valid")
+        upd["status"] = payload.status
+    if payload.password is not None:
+        if len(payload.password) < 6:
+            raise HTTPException(400, "Password min 6 karakter")
+        upd["password_hash"] = hash_password(payload.password)
+        if not existing.get("auth_provider"):
+            upd["auth_provider"] = "password"
+    if upd:
+        await db.users.update_one({"user_id": user_id}, {"$set": upd})
+    # If status disabled, invalidate all sessions
+    if payload.status == "disabled":
+        await db.user_sessions.delete_many({"user_id": user_id})
+    doc = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    return doc
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, admin: User = Depends(require_admin)):
+    if user_id == admin.user_id:
+        raise HTTPException(400, "Tidak bisa hapus diri sendiri")
+    await db.users.delete_one({"user_id": user_id})
+    await db.user_sessions.delete_many({"user_id": user_id})
     return {"ok": True}
 
 # ---------- Orders CRUD ----------
@@ -755,6 +962,199 @@ async def delete_freelance_project(project_id: str, user: User = Depends(get_cur
     await db.freelance_projects.delete_one({"id": project_id})
     return {"ok": True}
 
+# ---------- To-Do tasks ----------
+class TaskInput(BaseModel):
+    title: str
+    date: str  # YYYY-MM-DD
+    assignee: str = ""
+    assignee_type: str = "tim"  # "tim" | "freelance"
+    folder_code: str = ""
+    order_id: str = ""
+    status: str = "pending"  # pending | in_progress | done
+
+class TaskPatch(BaseModel):
+    status: Optional[str] = None
+    title: Optional[str] = None
+    assignee: Optional[str] = None
+    assignee_type: Optional[str] = None
+
+async def _auto_generate_tasks(date: str):
+    """For each active order (status != done/delivered/cancel), ensure a task exists for {date} per artist."""
+    done_like = {"done", "delivered", "cancel", "cancle"}
+    orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    created = 0
+    for o in orders:
+        if (o.get("status") or "").lower() in done_like:
+            continue
+        artists = o.get("artists") or []
+        statuses = o.get("artist_statuses") or []
+        if not artists:
+            # single unassigned task linked to order
+            artists = [o.get("marketer") or "Tim"]
+            statuses = ["Tim"]
+        for i, name in enumerate(artists):
+            if not name or not name.strip():
+                continue
+            atype = "freelance" if (statuses[i] if i < len(statuses) else "Tim").lower() == "freelance" else "tim"
+            title = f"{o.get('project', '')} — {name.strip()}"
+            existing = await db.tasks.find_one({"date": date, "order_id": o["id"], "assignee": name.strip()}, {"_id": 0})
+            if existing:
+                continue
+            doc = {
+                "id": str(uuid.uuid4()),
+                "title": title,
+                "date": date,
+                "assignee": name.strip(),
+                "assignee_type": atype,
+                "folder_code": o.get("folder_code", ""),
+                "order_id": o["id"],
+                "status": "pending",
+                "started_at": "",
+                "completed_at": "",
+                "duration_seconds": 0,
+                "auto_created": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.tasks.insert_one(doc)
+            created += 1
+    return created
+
+@api_router.get("/tasks/{date}")
+async def get_tasks(date: str, auto: bool = True, user: User = Depends(get_current_user)):
+    """Get tasks for a date. If auto=True and date==today and no tasks exist yet, auto-generate from active orders."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if auto and date == today:
+        count = await db.tasks.count_documents({"date": date})
+        if count == 0:
+            await _auto_generate_tasks(date)
+    docs = await db.tasks.find({"date": date}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    return docs
+
+@api_router.post("/tasks")
+async def create_task(payload: TaskInput, user: User = Depends(get_current_user)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        **payload.model_dump(),
+        "started_at": "",
+        "completed_at": "",
+        "duration_seconds": 0,
+        "auto_created": False,
+        "created_by": user.email,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.tasks.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.patch("/tasks/{task_id}")
+async def patch_task(task_id: str, payload: TaskPatch, user: User = Depends(get_current_user)):
+    existing = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Task not found")
+    # Talent can only edit tasks assigned to them (by name match on email prefix OR name)
+    if user.role == "talent":
+        if (existing.get("assignee") or "").lower() not in (user.name.lower(), user.email.split("@")[0].lower()):
+            raise HTTPException(403, "Hanya bisa update task milik sendiri")
+    upd = {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if payload.status is not None:
+        cur = existing.get("status", "pending")
+        new = payload.status
+        upd["status"] = new
+        if new == "in_progress" and cur != "in_progress":
+            upd["started_at"] = now_iso
+        if new == "done" and cur != "done":
+            upd["completed_at"] = now_iso
+            if existing.get("started_at"):
+                start_dt = datetime.fromisoformat(existing["started_at"])
+                dur = (datetime.now(timezone.utc) - start_dt).total_seconds()
+                upd["duration_seconds"] = int(max(0, dur))
+        if new == "pending":
+            upd["started_at"] = ""
+            upd["completed_at"] = ""
+            upd["duration_seconds"] = 0
+    if payload.title is not None:
+        upd["title"] = payload.title
+    if payload.assignee is not None:
+        upd["assignee"] = payload.assignee
+    if payload.assignee_type is not None:
+        upd["assignee_type"] = payload.assignee_type
+    if upd:
+        await db.tasks.update_one({"id": task_id}, {"$set": upd})
+    doc = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    return doc
+
+@api_router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str, user: User = Depends(require_admin_or_pm)):
+    await db.tasks.delete_one({"id": task_id})
+    return {"ok": True}
+
+# ---------- Performance ----------
+@api_router.get("/performance")
+async def get_performance(month: Optional[str] = None, user: User = Depends(get_current_user)):
+    """Compute per-member performance based on tasks. month=YYYY-MM filter optional."""
+    q = {"status": "done"}
+    if month:
+        q["date"] = {"$regex": f"^{month}"}
+    done_tasks = await db.tasks.find(q, {"_id": 0}).to_list(5000)
+
+    # all tasks (for pending/in_progress count)
+    q_all = {}
+    if month:
+        q_all["date"] = {"$regex": f"^{month}"}
+    all_tasks = await db.tasks.find(q_all, {"_id": 0}).to_list(10000)
+
+    # contribution credits from orders Done in the month (by artist_contributions %)
+    order_q = {"status": {"$in": ["done", "delivered"]}}
+    if month:
+        order_q["tanggal"] = {"$regex": f"^{month}"}
+    done_orders = await db.orders.find(order_q, {"_id": 0}).to_list(5000)
+
+    per_member = {}
+    def bucket(name: str):
+        if name not in per_member:
+            per_member[name] = {"assignee": name, "tasks_done": 0, "tasks_pending": 0, "tasks_in_progress": 0, "total_duration_sec": 0, "timed_task_count": 0, "credit_points": 0.0}
+        return per_member[name]
+
+    for t in done_tasks:
+        a = (t.get("assignee") or "").strip()
+        if not a:
+            continue
+        b = bucket(a)
+        b["tasks_done"] += 1
+        if t.get("duration_seconds"):
+            b["total_duration_sec"] += t["duration_seconds"]
+            b["timed_task_count"] += 1
+
+    for t in all_tasks:
+        a = (t.get("assignee") or "").strip()
+        if not a:
+            continue
+        if t.get("status") == "pending":
+            bucket(a)["tasks_pending"] += 1
+        elif t.get("status") == "in_progress":
+            bucket(a)["tasks_in_progress"] += 1
+
+    for o in done_orders:
+        artists = o.get("artists") or []
+        contribs = o.get("artist_contributions") or []
+        for i, name in enumerate(artists):
+            pct = contribs[i] if i < len(contribs) else (100 / len(artists) if artists else 0)
+            b = bucket(name.strip())
+            b["credit_points"] += float(pct or 0) / 100.0
+
+    # compute avg speed
+    rows = []
+    for name, b in per_member.items():
+        avg = (b["total_duration_sec"] / b["timed_task_count"] / 3600) if b["timed_task_count"] else 0
+        rows.append({
+            **b,
+            "avg_speed_hours": round(avg, 2),
+        })
+    rows.sort(key=lambda r: (r["tasks_done"], r["credit_points"]), reverse=True)
+    return {"month": month or "all", "members": rows}
+
+
 
 # ---------- Settings ----------
 @api_router.get("/settings")
@@ -855,6 +1255,20 @@ async def reminder_loop():
                         logger.info(f"Telegram reminder sent: {key}")
         except Exception as e:
             logger.exception(f"reminder_loop error: {e}")
+
+async def daily_task_generator_loop():
+    """Every hour, ensure today has auto-generated tasks. Runs at boot and catches 00:00 rollover."""
+    while True:
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            count = await db.tasks.count_documents({"date": today})
+            if count == 0:
+                n = await _auto_generate_tasks(today)
+                if n:
+                    logger.info(f"Auto-generated {n} tasks for {today}")
+        except Exception as e:
+            logger.exception(f"daily_task_generator_loop error: {e}")
+        await asyncio.sleep(3600)  # every hour
         await asyncio.sleep(600)
 
 # ---------- WebSocket ----------
@@ -903,15 +1317,24 @@ async def on_startup():
         logger.info(f"Seeded {len(SAMPLE_ORDERS)} sample orders")
     # backfill missing fields on existing docs
     await db.orders.update_many({"platform": {"$exists": False}}, {"$set": {"platform": "Direct", "marketer": "", "order_id": "", "folder_code": "", "fee_freelance": 0}})
-    await db.users.update_many({"role": {"$exists": False}}, {"$set": {"role": "member"}})
+    await db.users.update_many({"role": "member"}, {"$set": {"role": "pm"}})
+    await db.users.update_many({"status": {"$exists": False}}, {"$set": {"status": "active"}})
+    await db.users.update_many({"auth_provider": {"$exists": False}}, {"$set": {"auth_provider": "google"}})
     # regenerate missing folder codes
     missing = await db.orders.find({"$or": [{"folder_code": ""}, {"folder_code": {"$exists": False}}]}, {"_id": 0}).to_list(2000)
     for o in missing:
         fc = await generate_folder_code(o.get("tanggal", ""), o.get("platform", "Direct"), o.get("klien", ""), o.get("project", ""))
         await db.orders.update_one({"id": o["id"]}, {"$set": {"folder_code": fc}})
     await get_settings_doc()
+    # MongoDB indexes
+    try:
+        await db.users.create_index("email", unique=True)
+        await db.tasks.create_index([("date", 1), ("order_id", 1), ("assignee", 1)])
+    except Exception as e:
+        logger.warning(f"index create warn: {e}")
     asyncio.create_task(reminder_loop())
-    logger.info("Reminder loop started")
+    asyncio.create_task(daily_task_generator_loop())
+    logger.info("Reminder & daily-task loops started")
 
 app.include_router(api_router)
 

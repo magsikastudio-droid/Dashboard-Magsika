@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Save, Plus, X, Mail, Bell, ShieldCheck, Users, TestTube, MessageSquare, RotateCcw } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Settings as SettingsIcon, Save, Plus, X, Mail, Bell, ShieldCheck, Users, TestTube, MessageSquare, RotateCcw, Check, Ban, Trash2, UserPlus, Lock } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
@@ -16,6 +17,7 @@ export default function Settings() {
   const { user } = useAuth();
   const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", reminders_enabled: true, telegram_templates: {} });
   const [users, setUsers] = useState([]);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -59,6 +61,10 @@ export default function Settings() {
   };
   const removeEmail = (e) => setSettings({ ...settings, allowed_emails: settings.allowed_emails.filter((x) => x !== e) });
 
+  const refreshUsers = async () => {
+    try { const r = await api.get("/users"); setUsers(r.data || []); } catch {}
+  };
+
   if (user?.role !== "admin") return (
     <div className="bg-white rounded-2xl border border-[var(--ms-border)] p-10 text-center">
       <ShieldCheck size={32} className="mx-auto mb-3 text-rose-500" />
@@ -96,21 +102,20 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="bg-white rounded-2xl border border-[var(--ms-border)] p-6">
-        <div className="flex items-center gap-2.5 mb-3"><Users size={16} style={{ color: "var(--ms-primary)" }} /><h2 className="font-display text-xl font-bold">Tim yang Sudah Login</h2></div>
+      <section className="bg-white rounded-2xl border border-[var(--ms-border)] p-6" data-testid="user-management-section">
+        <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+          <div className="flex items-center gap-2.5"><Users size={16} style={{ color: "var(--ms-primary)" }} /><h2 className="font-display text-xl font-bold">User Management</h2></div>
+          <button onClick={() => setInviteOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-full text-white text-xs font-semibold hover:opacity-90" style={{ background: "var(--ms-primary)" }} data-testid="invite-user-btn"><Plus size={12} /> Invite User</button>
+        </div>
+        <p className="text-sm text-[var(--ms-text-muted)] mb-4">Kelola akses tim. User baru mendaftar status <strong>pending</strong> sampai disetujui. Admin bisa invite user langsung aktif.</p>
         <div className="space-y-2" data-testid="users-list">
+          {users.length === 0 && <p className="text-xs text-[var(--ms-text-muted)] italic">Belum ada user.</p>}
           {users.map((u) => (
-            <div key={u.user_id} className="flex items-center gap-3 p-2.5 rounded-xl bg-[var(--ms-bg)] border border-[var(--ms-border)]">
-              {u.picture ? <img src={u.picture} alt="" className="w-8 h-8 rounded-full" /> : <div className="w-8 h-8 rounded-full bg-[var(--ms-primary-soft)] flex items-center justify-center font-bold text-xs" style={{ color: "var(--ms-primary)" }}>{(u.name || u.email)[0].toUpperCase()}</div>}
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold truncate">{u.name || "—"}</div>
-                <div className="text-xs text-[var(--ms-text-muted)] truncate font-mono">{u.email}</div>
-              </div>
-              <span className="text-[0.65rem] uppercase tracking-wider font-bold font-mono px-2 py-0.5 rounded-full" style={{ background: u.role === "admin" ? "#dcfce7" : "var(--ms-primary-soft)", color: u.role === "admin" ? "#15803d" : "var(--ms-primary)" }}>{u.role}</span>
-            </div>
+            <UserRow key={u.user_id} u={u} me={user} onChanged={refreshUsers} />
           ))}
         </div>
       </section>
+      {inviteOpen && <InviteUserModal onClose={() => setInviteOpen(false)} onSaved={() => { setInviteOpen(false); refreshUsers(); }} />}
 
       <section className="bg-white rounded-2xl border border-[var(--ms-border)] p-6">
         <div className="flex items-center gap-2.5 mb-1"><Bell size={16} style={{ color: "var(--ms-primary)" }} /><h2 className="font-display text-xl font-bold">Telegram Reminder</h2></div>
@@ -173,5 +178,137 @@ export default function Settings() {
         </button>
       </div>
     </div>
+  );
+}
+
+
+const STATUS_META = {
+  active: { label: "Aktif", bg: "bg-emerald-100", text: "text-emerald-700" },
+  pending: { label: "Pending", bg: "bg-amber-100", text: "text-amber-700" },
+  disabled: { label: "Disabled", bg: "bg-slate-200", text: "text-slate-600" },
+};
+const ROLE_BG = { admin: "#dcfce7:#15803d", pm: "#dbeafe:#1e40af", talent: "#fef3c7:#92400e" };
+const roleStyle = (r) => { const [bg, t] = (ROLE_BG[r] || ROLE_BG.talent).split(":"); return { background: bg, color: t }; };
+
+function UserRow({ u, me, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(u.name || "");
+  const [role, setRole] = useState(u.role || "talent");
+  const [pwd, setPwd] = useState("");
+  const [saving, setSaving] = useState(false);
+  const status = u.status || "active";
+  const meta = STATUS_META[status];
+
+  const doPatch = async (payload, successMsg) => {
+    setSaving(true);
+    try { await api.patch(`/users/${u.user_id}`, payload); toast.success(successMsg); onChanged(); setEditing(false); setPwd(""); }
+    catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
+    finally { setSaving(false); }
+  };
+  const approve = () => doPatch({ status: "active" }, "Disetujui");
+  const reject = () => doPatch({ status: "disabled" }, "Ditolak");
+  const reactivate = () => doPatch({ status: "active" }, "Diaktifkan");
+  const disable = () => doPatch({ status: "disabled" }, "Dinonaktifkan");
+  const saveEdit = () => {
+    const payload = { name, role };
+    if (pwd.trim()) payload.password = pwd;
+    doPatch(payload, "Tersimpan");
+  };
+  const remove = async () => {
+    if (!window.confirm(`Hapus user ${u.email}?`)) return;
+    try { await api.delete(`/users/${u.user_id}`); toast.success("Dihapus"); onChanged(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
+  };
+
+  const inp = "w-full px-3 py-2 rounded-lg border border-[var(--ms-border)] bg-white text-sm focus:outline-none focus:border-[var(--ms-primary)]";
+  const isSelf = u.user_id === me?.user_id;
+
+  return (
+    <div className="p-3 rounded-xl bg-[var(--ms-bg)] border border-[var(--ms-border)]" data-testid={`user-row-${u.email}`}>
+      <div className="flex items-center gap-3 flex-wrap">
+        {u.picture ? <img src={u.picture} alt="" className="w-8 h-8 rounded-full" /> : <div className="w-8 h-8 rounded-full bg-[var(--ms-primary-soft)] flex items-center justify-center font-bold text-xs" style={{ color: "var(--ms-primary)" }}>{(u.name || u.email)[0].toUpperCase()}</div>}
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold truncate">{u.name || "—"}{isSelf && <span className="ml-1 text-[0.6rem] font-mono text-[var(--ms-text-muted)]">(you)</span>}</div>
+          <div className="text-xs text-[var(--ms-text-muted)] truncate font-mono">{u.email}</div>
+        </div>
+        <span className="text-[0.65rem] uppercase tracking-wider font-bold font-mono px-2 py-0.5 rounded-full" style={roleStyle(u.role)}>{u.role}</span>
+        <span className={`text-[0.65rem] uppercase tracking-wider font-bold font-mono px-2 py-0.5 rounded-full ${meta.bg} ${meta.text}`} data-testid={`user-status-${u.email}`}>{meta.label}</span>
+        <div className="flex gap-1">
+          {status === "pending" && <>
+            <button onClick={approve} disabled={saving} className="p-1.5 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50" title="Setujui" data-testid={`approve-${u.email}`}><Check size={12} /></button>
+            <button onClick={reject} disabled={saving} className="p-1.5 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50" title="Tolak"><Ban size={12} /></button>
+          </>}
+          {status === "active" && !isSelf && <button onClick={disable} disabled={saving} className="p-1.5 rounded-lg border border-[var(--ms-border)] text-[var(--ms-text-muted)] hover:bg-white" title="Disable"><Ban size={12} /></button>}
+          {status === "disabled" && <button onClick={reactivate} disabled={saving} className="p-1.5 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50" title="Aktifkan" data-testid={`reactivate-${u.email}`}><Check size={12} /></button>}
+          <button onClick={() => setEditing(!editing)} className="p-1.5 rounded-lg border border-[var(--ms-border)] hover:bg-white" title="Edit">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+          </button>
+          {!isSelf && <button onClick={remove} className="p-1.5 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50" title="Hapus" data-testid={`delete-${u.email}`}><Trash2 size={12} /></button>}
+        </div>
+      </div>
+      {editing && (
+        <div className="mt-3 pt-3 border-t border-[var(--ms-border)] grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <input className={inp} placeholder="Nama" value={name} onChange={(e) => setName(e.target.value)} data-testid={`edit-name-${u.email}`} />
+          <select className={inp} value={role} onChange={(e) => setRole(e.target.value)} data-testid={`edit-role-${u.email}`}>
+            <option value="admin">Admin</option>
+            <option value="pm">PM</option>
+            <option value="talent">Talent</option>
+          </select>
+          <input type="password" className={inp} placeholder="Password baru (opsional)" value={pwd} onChange={(e) => setPwd(e.target.value)} data-testid={`edit-pwd-${u.email}`} />
+          <div className="sm:col-span-3 flex justify-end gap-2">
+            <button onClick={() => setEditing(false)} className="px-3 py-1.5 rounded-full border border-[var(--ms-border)] text-xs font-semibold">Batal</button>
+            <button onClick={saveEdit} disabled={saving} className="px-3 py-1.5 rounded-full text-white text-xs font-semibold" style={{ background: "var(--ms-primary)" }} data-testid={`save-edit-${u.email}`}>{saving ? "..." : "Simpan"}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InviteUserModal({ onClose, onSaved }) {
+  const [f, setF] = useState({ email: "", password: "", name: "", role: "talent" });
+  const [saving, setSaving] = useState(false);
+  const submit = async () => {
+    if (!f.email.includes("@") || f.password.length < 6) { toast.error("Email valid & password min 6 karakter"); return; }
+    setSaving(true);
+    try { await api.post("/auth/invite", { ...f, email: f.email.toLowerCase().trim() }); toast.success("User di-invite (langsung aktif)"); onSaved(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
+    finally { setSaving(false); }
+  };
+  const inp = "w-full px-3 py-2 rounded-lg border border-[var(--ms-border)] bg-white text-sm focus:outline-none focus:border-[var(--ms-primary)]";
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-md flex items-start justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="invite-modal">
+      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-md p-6 my-6 space-y-3">
+        <div className="flex items-center justify-between"><h3 className="font-display text-xl font-bold flex items-center gap-2"><UserPlus size={18} /> Invite User</h3><button onClick={onClose} className="p-1 rounded hover:bg-[var(--ms-bg)]"><X size={16} /></button></div>
+        <p className="text-xs text-[var(--ms-text-muted)]">User yang di-invite langsung <strong>aktif</strong> tanpa perlu approval. Share email + password ke user secara manual (via WA/DM).</p>
+        <div>
+          <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Email</div>
+          <input className={inp} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="user@example.com" data-testid="inv-email" />
+        </div>
+        <div>
+          <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Nama</div>
+          <input className={inp} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Nama lengkap" data-testid="inv-name" />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Password awal (min 6)</div>
+            <input type="text" className={inp} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="min 6 karakter" data-testid="inv-password" />
+          </div>
+          <div>
+            <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Role</div>
+            <select className={inp} value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })} data-testid="inv-role">
+              <option value="talent">Talent</option>
+              <option value="pm">PM</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-full border border-[var(--ms-border)] text-sm font-semibold">Batal</button>
+          <button onClick={submit} disabled={saving} className="px-4 py-2 rounded-full text-white text-sm font-semibold" style={{ background: "var(--ms-primary)" }} data-testid="inv-submit">{saving ? "..." : "Invite"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

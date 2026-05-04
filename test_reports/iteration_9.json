@@ -1,0 +1,43 @@
+{
+  "summary": "Iter 8B-E backend+frontend testing. Backend pytest 29/30 PASS — full coverage of email/password auth (register/pending block/approve/login/logout), admin invite, RBAC for /api/users, tasks state machine (pending→in_progress sets started_at; in_progress→done sets completed_at + duration_seconds≥1; talent can patch own only; delete requires admin/pm), task auto-generation on /api/tasks/{today}, /api/performance month aggregation with credit_points, regression on /api/orders|/api/earnings|/api/freelance/artists, and talent role guard for /api/settings (403). FAILED: brute-force throttle (test_brute_force_429_after_5_fails) — backend uses request.client.host as throttle key but in K8s ingress that IP rotates across multiple proxy pods, splitting the counter so 6th attempt still returns 401 not 429. Real production-relevant security gap. Frontend Playwright run end-to-end PASS: tab-login/tab-register/input-email/input-password/google-login-btn all visible; register fe.iter8.*@iter8test.com → 'belum disetujui' message on immediate login; admin via cookie injection sees user-role-badge, gear-icon, currency-toggle; Settings user-management-section + approve-{email} + invite-modal all functional (invited user appears in list); Talent (after admin approval) login redirects to /todo, role badge=Talent, gear+currency HIDDEN, /orders+/settings redirect→/todo, /todo + /performance reachable. Cleanup done (login_attempts cleared, iter8test users + Iter8Test tasks deleted).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login (brute force throttle)", "issue": "Throttle key uses request.client.host which is the K8s ingress proxy pod IP. Behind a multi-pod ingress this rotates per request (observed 10.211.4.55 and 10.211.3.173 in same test run), splitting the counter and effectively bypassing the 5-fail/15-min lock. Should read X-Forwarded-For / X-Real-IP for trusted proxy chain and use the originating client IP. Test 6th attempt still returned 401 instead of 429."},
+      {"endpoint": "PATCH /api/tasks/{id} (talent guard)", "issue": "Talent identity match uses lower(user.name) OR email-prefix vs assignee. If admin sets task.assignee to a name the talent uses but with different casing/spaces, talent will be locked out of legitimately-assigned tasks. Consider adding explicit assignee_user_id field instead of name string match."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Talent /performance scope", "issue": "Brief says 'Talent only sees own row', but the page-header stat 'Anggota Aktif: 6' showed for talent (whole-team count). Per-member cards section did not render (no done tasks this month) so could not confirm row filter empirically. Needs verification with seeded done tasks across multiple members.", "affected_selectors": ["[data-testid=performance-page]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter8be.py",
+    "/app/test_reports/pytest/iter8be_results.xml"
+  ],
+  "action_items": [
+    "Fix /api/auth/login brute-force key: switch to X-Forwarded-For (first hop) or use Starlette's TrustedHostMiddleware-aware IP extraction so the 5/15min lock is enforced consistently behind K8s ingress.",
+    "Verify Talent-only filter on /performance: ensure stat cards (Task Selesai/Avg Kecepatan/Credit Points/Anggota Aktif) and member cards are scoped to the logged-in talent's assignee match, not whole-team.",
+    "Optional hardening: replace name-string assignee match with assignee_user_id reference for stricter talent task ownership."
+  ],
+  "critical_code_review_comments": [
+    "server.py auth_login: brute force counter key 'ip::email' uses request.client.host — incorrect behind reverse proxy. Use request.headers.get('X-Forwarded-For','').split(',')[0].strip() or 'X-Real-IP' for the actual client IP.",
+    "server.py patch_task: talent identity check is fragile (lower-case name OR email-prefix). Cleaner to assign tasks by user_id and check user.user_id == task.assignee_user_id.",
+    "server.py /api/performance: returns full team rows for any logged-in user — backend does NOT scope by user.role==talent. Frontend appears to be the only enforcement, which the brief explicitly accepts but is worth re-confirming for cards (not just member rows).",
+    "server.py daily task auto-gen called inside GET /api/tasks/{today}: race-prone if two clients hit simultaneously when count==0 (no idempotency guard / lock). Existing-task check inside loop mitigates dupes per (date,order_id,assignee), so safe in practice but worth noting."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter8be.py",
+    "/app/test_reports/pytest/iter8be_results.xml"
+  ],
+  "success_rate": {"backend": "97% (29/30 pytest)", "frontend": "100% on tested flows (login tabs, register-pending, admin approve, invite, role guards, talent /todo + /performance access)"},
+  "test_credentials": "Existing seed admin token sess_admin_1777758074903 (admin@magsika.test, role=admin, status=active) — verified valid. Test users created+deleted within the iteration.",
+  "seed_data_creation": "Created and CLEANED UP: fe.iter8.<ts>@iter8test.com (talent, registered+approved+used for talent flows), fe.invite.<ts>@iter8test.com (pm via invite, then deleted), bruteforce.<ts>@iter8test.com (synthetic), Iter8Test Manual Task / Iter8Test Foreign Task. mongosh deleteMany on email regex iter8test, title regex Iter8Test, and login_attempts done at end.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend has one real security gap: brute-force throttle keyed on K8s pod IP (request.client.host) — counter splits across ingress pods so 5/15min lock is bypassable. Reproduce via 5 consecutive POST /api/auth/login with wrong password from same client; you'll see login_attempts collection grow under TWO different ip-prefixed keys. Fix is one-liner: read X-Forwarded-For. Frontend talent /performance scoping not fully validated due to no done tasks in test month — main agent should hand-verify the talent-only row filter when seeded data exists.",
+  "rca of the issue": "RCA — brute-force bypass: POST /api/auth/login throttle uses key=f'{request.client.host}::{email}' with limit=5 in 15min. In this K8s deployment, request.client.host is the *internal* IP of the ingress reverse-proxy pod, not the originating client. The ingress load-balances incoming requests across multiple proxy pods, so consecutive requests from the same external client surface different request.client.host values (observed 10.211.4.55 and 10.211.3.173 in a 6-attempt loop). Result: counter is partitioned and never reaches 5. Mitigation: replace request.client.host with request.headers.get('X-Forwarded-For','').split(',')[0].strip() (fall back to X-Real-IP, then request.client.host)."
+}

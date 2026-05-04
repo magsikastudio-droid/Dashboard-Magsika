@@ -1,19 +1,41 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, Wifi, WifiOff, Dice5, Settings as SettingsIcon, TrendingUp, Palette, Archive, DollarSign, RefreshCw } from "lucide-react";
+import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, WifiOff, Dice5, Settings as SettingsIcon, TrendingUp, Palette, Archive, RefreshCw, CheckSquare, Award } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useOrders } from "../context/OrdersContext";
 import { useCurrency } from "../context/CurrencyContext";
 
-const baseNav = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
-  { to: "/orders", label: "Orders", icon: ClipboardList, testid: "nav-orders" },
-  { to: "/board", label: "Board", icon: KanbanSquare, testid: "nav-board" },
-  { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
-  { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
-  { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
-  { to: "/archive", label: "Arsip", icon: Archive, testid: "nav-archive" },
-];
+const ROLE_LABELS = { admin: "Admin", pm: "PM", talent: "Talent" };
+const ROLE_COLORS = { admin: "#6d4cff", pm: "#0ea5e9", talent: "#f59e0b" };
+
+const NAV_BY_ROLE = {
+  admin: [
+    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
+    { to: "/orders", label: "Orders", icon: ClipboardList, testid: "nav-orders" },
+    { to: "/board", label: "Board", icon: KanbanSquare, testid: "nav-board" },
+    { to: "/todo", label: "To Do", icon: CheckSquare, testid: "nav-todo" },
+    { to: "/performance", label: "Performance", icon: Award, testid: "nav-performance" },
+    { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
+    { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
+    { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
+    { to: "/archive", label: "Arsip", icon: Archive, testid: "nav-archive" },
+  ],
+  pm: [
+    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
+    { to: "/orders", label: "Orders", icon: ClipboardList, testid: "nav-orders" },
+    { to: "/board", label: "Board", icon: KanbanSquare, testid: "nav-board" },
+    { to: "/todo", label: "To Do", icon: CheckSquare, testid: "nav-todo" },
+    { to: "/performance", label: "Performance", icon: Award, testid: "nav-performance" },
+    { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
+    { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
+    { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
+    { to: "/archive", label: "Arsip", icon: Archive, testid: "nav-archive" },
+  ],
+  talent: [
+    { to: "/todo", label: "To Do", icon: CheckSquare, testid: "nav-todo" },
+    { to: "/performance", label: "Performance", icon: Award, testid: "nav-performance" },
+  ],
+};
 
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
@@ -23,7 +45,8 @@ export default function Layout({ children }) {
   const [showRate, setShowRate] = useState(false);
   const [rateInput, setRateInput] = useState(rate);
 
-  const navItems = user?.role === "admin" ? [...baseNav, { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" }] : baseNav;
+  const navItems = NAV_BY_ROLE[user?.role] || NAV_BY_ROLE.talent;
+  const isAdmin = user?.role === "admin";
 
   const saveRate = () => { updateRate(parseFloat(rateInput) || 16000); setShowRate(false); };
 
@@ -31,7 +54,7 @@ export default function Layout({ children }) {
     <div className="min-h-screen" style={{ background: "var(--ms-bg)" }}>
       <header className="sticky top-0 z-30 backdrop-blur bg-white/85 border-b border-[var(--ms-border)]">
         <div className="max-w-[1500px] mx-auto px-6 py-4 flex items-center justify-between gap-4">
-          <button onClick={() => navigate("/dashboard")} className="flex items-center gap-3" data-testid="brand-logo">
+          <button onClick={() => navigate(user?.role === "talent" ? "/todo" : "/dashboard")} className="flex items-center gap-3" data-testid="brand-logo">
             <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white" style={{ background: "linear-gradient(135deg, #6d4cff, #3a8dff)" }}>
               <Dice5 size={20} />
             </div>
@@ -53,14 +76,18 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="flex items-center gap-2">
-            {/* Currency toggle + rate */}
-            <div className="flex items-center bg-[var(--ms-bg)] p-0.5 rounded-full border border-[var(--ms-border)]" data-testid="currency-toggle">
-              <button onClick={() => setDisplayCurrency("USD")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "USD" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-usd-btn">$ USD</button>
-              <button onClick={() => setDisplayCurrency("IDR")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "IDR" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-idr-btn">Rp IDR</button>
-            </div>
-            <button onClick={() => setShowRate(!showRate)} className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--ms-bg)] border border-[var(--ms-border)] text-[0.68rem] font-mono font-semibold hover:bg-white transition-base" data-testid="rate-btn" title="Atur kurs">
-              <RefreshCw size={11} /> 1$ = Rp{Math.round(rate).toLocaleString("id-ID")}
-            </button>
+            {/* Currency toggle + rate (hidden for Talent since they don't see money) */}
+            {user?.role !== "talent" && (
+              <>
+                <div className="flex items-center bg-[var(--ms-bg)] p-0.5 rounded-full border border-[var(--ms-border)]" data-testid="currency-toggle">
+                  <button onClick={() => setDisplayCurrency("USD")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "USD" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-usd-btn">$ USD</button>
+                  <button onClick={() => setDisplayCurrency("IDR")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "IDR" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-idr-btn">Rp IDR</button>
+                </div>
+                <button onClick={() => setShowRate(!showRate)} className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--ms-bg)] border border-[var(--ms-border)] text-[0.68rem] font-mono font-semibold hover:bg-white transition-base" data-testid="rate-btn" title="Atur kurs">
+                  <RefreshCw size={11} /> 1$ = Rp{Math.round(rate).toLocaleString("id-ID")}
+                </button>
+              </>
+            )}
             {showRate && (
               <div className="absolute top-16 right-6 bg-white border border-[var(--ms-border)] rounded-2xl p-4 shadow-lg z-50 w-72" data-testid="rate-popup">
                 <div className="text-xs font-bold mb-2 uppercase tracking-wider font-mono" style={{ color: "var(--ms-primary)" }}>Kurs IDR / 1 USD</div>
@@ -77,7 +104,12 @@ export default function Layout({ children }) {
             </div>
             {user && (
               <div className="flex items-center gap-2">
-                {user.picture && <img src={user.picture} alt="" className="w-8 h-8 rounded-full border border-[var(--ms-border)]" />}
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--ms-bg)] border border-[var(--ms-border)]">
+                  {user.picture ? <img src={user.picture} alt="" className="w-5 h-5 rounded-full" /> : <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[0.65rem] font-bold" style={{ background: ROLE_COLORS[user.role] }}>{user.name?.[0]?.toUpperCase() || "?"}</div>}
+                  <span className="text-[0.7rem] font-semibold hidden md:inline">{user.name || user.email}</span>
+                  <span className="text-[0.58rem] font-bold font-mono px-1.5 py-0 rounded-full text-white" style={{ background: ROLE_COLORS[user.role] }} data-testid="user-role-badge">{ROLE_LABELS[user.role]}</span>
+                </div>
+                {isAdmin && <NavLink to="/settings" className="p-2 rounded-full hover:bg-[var(--ms-bg)] text-[var(--ms-text-muted)]" data-testid="gear-icon" title="Settings"><SettingsIcon size={16} /></NavLink>}
                 <button onClick={logout} className="p-2 rounded-full hover:bg-[var(--ms-bg)] text-[var(--ms-text-muted)] transition-base" data-testid="logout-btn"><LogOut size={16} /></button>
               </div>
             )}

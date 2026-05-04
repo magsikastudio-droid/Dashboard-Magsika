@@ -2,7 +2,7 @@ import React from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-export default function ProtectedRoute({ children }) {
+export default function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
   if (loading) {
     return (
@@ -12,5 +12,9 @@ export default function ProtectedRoute({ children }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    // Talent → redirect to /todo, others → /dashboard
+    return <Navigate to={user.role === "talent" ? "/todo" : "/dashboard"} replace />;
+  }
   return children;
 }

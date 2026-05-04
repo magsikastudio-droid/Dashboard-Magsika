@@ -17,9 +17,15 @@ import Settings from "@/pages/Settings";
 import Earning from "@/pages/Earning";
 import Freelance from "@/pages/Freelance";
 import Archive from "@/pages/Archive";
+import Todo from "@/pages/Todo";
+import Performance from "@/pages/Performance";
 
-const gated = (Page) => (
-  <ProtectedRoute>
+const ADMIN_PM = ["admin", "pm"];
+const ALL = ["admin", "pm", "talent"];
+const ADMIN_ONLY = ["admin"];
+
+const gated = (Page, roles = ADMIN_PM) => (
+  <ProtectedRoute allowedRoles={roles}>
     <OrdersProvider>
       <CurrencyProvider>
         <Layout>
@@ -43,7 +49,9 @@ function AppRouter() {
       <Route path="/earning" element={gated(Earning)} />
       <Route path="/freelance" element={gated(Freelance)} />
       <Route path="/archive" element={gated(Archive)} />
-      <Route path="/settings" element={gated(Settings)} />
+      <Route path="/todo" element={gated(Todo, ALL)} />
+      <Route path="/performance" element={gated(Performance, ALL)} />
+      <Route path="/settings" element={gated(Settings, ADMIN_ONLY)} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
@@ -52,14 +60,12 @@ function AppRouter() {
 
 function App() {
   return (
-    <div className="App">
+    <AuthProvider>
       <BrowserRouter>
-        <AuthProvider>
-          <AppRouter />
-          <Toaster position="top-right" richColors />
-        </AuthProvider>
+        <AppRouter />
+        <Toaster position="top-right" richColors closeButton />
       </BrowserRouter>
-    </div>
+    </AuthProvider>
   );
 }
 
