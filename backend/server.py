@@ -386,9 +386,10 @@ async def auth_register(payload: RegisterInput):
 @api_router.post("/auth/login")
 async def auth_login(payload: LoginInput, request: Request, response: Response):
     email = (payload.email or "").lower().strip()
-    # brute force throttle (simple): max 5 fails in 15min by email+ip
-    ip = request.client.host if request.client else "unknown"
-    key = f"{ip}::{email}"
+    # brute force throttle: use X-Forwarded-For (first hop) when behind proxy
+    xff = request.headers.get("x-forwarded-for", "")
+    client_ip = xff.split(",")[0].strip() if xff else (request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown"))
+    key = f"{client_ip}::{email}"
     now = datetime.now(timezone.utc)
     attempts_doc = await db.login_attempts.find_one({"_id": key}) or {}
     fails = attempts_doc.get("fails", [])
@@ -1152,6 +1153,11 @@ async def get_performance(month: Optional[str] = None, user: User = Depends(get_
             "avg_speed_hours": round(avg, 2),
         })
     rows.sort(key=lambda r: (r["tasks_done"], r["credit_points"]), reverse=True)
+    # Talent: scope to self
+    if user.role == "talent":
+        my_name = (user.name or "").lower()
+        my_handle = (user.email or "").split("@")[0].lower()
+        rows = [r for r in rows if r["assignee"].lower() in (my_name, my_handle)]
     return {"month": month or "all", "members": rows}
 
 

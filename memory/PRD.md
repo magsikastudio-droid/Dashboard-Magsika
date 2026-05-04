@@ -36,6 +36,60 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - Telegram reminder loop + test endpoint
 - Archive page
 
+## Implemented (iter 8 Phase B-E — Auth + RBAC + To Do + Performance, 2026-05-04) ✅
+
+### Phase 8B — Auth Overhaul
+- ✅ Email/password custom auth (bcrypt) alongside existing Google OAuth
+- ✅ `POST /api/auth/register` — first user = admin+active, rest = `pending`
+- ✅ `POST /api/auth/login` — checks status=='active', issues session_token cookie
+- ✅ `POST /api/auth/invite` (admin) — creates active user, password set manually
+- ✅ `POST /api/auth/logout`
+- ✅ Brute-force throttle 5-fails/15min (via X-Forwarded-For — K8s ingress compatible)
+- ✅ Roles: admin / pm / talent (auto-migrate legacy 'member'→'pm')
+- ✅ User schema: password_hash, status (active|pending|disabled), auth_provider
+- ✅ get_current_user blocks pending/disabled users
+
+### Phase 8C — User Management
+- ✅ Settings page: new "User Management" section (admin only)
+- ✅ Gear icon moved to header top-right (admin only)
+- ✅ Invite user modal with role select + manual password
+- ✅ Per-user actions: approve / reject / disable / reactivate / edit name+role / reset password / delete
+- ✅ Status badges (Aktif / Pending / Disabled)
+- ✅ Cannot delete self
+
+### Phase 8D — To Do
+- ✅ New `/todo` page, role=all (Admin/PM/Talent)
+- ✅ Backend: GET/POST `/api/tasks`, PATCH `/api/tasks/{id}`, DELETE (admin+pm)
+- ✅ Auto-generate tasks dari order aktif (status ≠ done) saat /api/tasks/{today} diakses pertama kali
+- ✅ Daily hourly loop di startup (backup ke cron 00:00)
+- ✅ 3-status timer: pending → in_progress (started_at) → done (completed_at + duration_seconds)
+- ✅ Reset ke Pending menghapus timer
+- ✅ Date navigation (prev/next/today + date picker)
+- ✅ Grouped by Tim Internal vs Freelance
+- ✅ Manual task add modal dengan search order untuk auto-link folder code
+- ✅ Talent hanya bisa PATCH task miliknya (backend enforced)
+
+### Phase 8E — Performance
+- ✅ New `/performance` page, role=all
+- ✅ Backend `GET /api/performance?month=YYYY-MM` aggregates:
+  - tasks_done per member (from tasks collection)
+  - tasks_pending, tasks_in_progress
+  - avg_speed_hours (from done tasks that had started_at)
+  - credit_points (dari order status=done × artist_contributions%)
+- ✅ Talent role: backend AUTO-SCOPE to self only
+- ✅ 4 stat cards + per-member cards with progress bars
+
+### Frontend shell
+- ✅ Layout nav role-based (Admin/PM 9 links, Talent 2 links)
+- ✅ Currency toggle hidden for Talent
+- ✅ Role badge in header with color code (admin=green, pm=blue, talent=amber)
+- ✅ ProtectedRoute takes `allowedRoles` prop, Talent auto-redirects to /todo
+
+### Testing
+- ✅ 29/30 pytest pass + 100% frontend flows verified
+- ✅ Brute force throttle now working (X-Forwarded-For fix applied post-testing)
+- ✅ Performance talent scope enforced backend-side
+
 ## Implemented (iter 8 Phase A — Order quick wins, 2026-05-03) ✅
 - ✅ Inline status edit di tabel Orders — clickable dropdown per row, auto-save via PUT /api/orders/{id} (juga ada backup PATCH /api/orders/{id}/status endpoint)
 - ✅ Artist contribution % di OrderModal — parallel array `artist_contributions`, total must = 100 to save. UI: per-artist % input + total bar (green=100 / amber<100 / red>100) + remaining hint
