@@ -116,6 +116,11 @@ export default function ImportCSVModal({ open, onClose, onImported }) {
   const importableRows = buildPayload.filter((_, i) => !skip[i]);
   const requiredMapped = FIELDS.filter((f) => f.required).every((f) => Object.values(mapping).includes(f.key));
 
+  const resetAndClose = () => {
+    setRaw([]); setMapping({}); setSkip({}); setResult(null); setImporting(false);
+    onClose();
+  };
+
   if (!open) return null;
 
   const doImport = async () => {
@@ -137,14 +142,14 @@ export default function ImportCSVModal({ open, onClose, onImported }) {
   };
 
   const modal = (
-    <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-md flex items-start justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="import-csv-modal">
+    <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-md flex items-start justify-center p-4 overflow-y-auto" onClick={resetAndClose} data-testid="import-csv-modal">
       <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-5xl my-6">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--ms-border)]">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-[var(--ms-primary-soft)] flex items-center justify-center" style={{ color: "var(--ms-primary)" }}><Upload size={16} /></div>
             <h3 className="font-display text-xl font-bold">Import Orders dari CSV</h3>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-[var(--ms-bg)]" data-testid="import-close-btn"><X size={16} /></button>
+          <button onClick={resetAndClose} className="p-1 rounded hover:bg-[var(--ms-bg)]" data-testid="import-close-btn"><X size={16} /></button>
         </div>
 
         <div className="p-6 space-y-5">
@@ -238,7 +243,7 @@ export default function ImportCSVModal({ open, onClose, onImported }) {
               )}
               <div className="flex justify-center gap-2">
                 <button onClick={() => { setRaw([]); setMapping({}); setSkip({}); setResult(null); }} className="px-4 py-2 rounded-full border border-[var(--ms-border)] text-sm font-semibold" data-testid="import-another-btn">Import file lain</button>
-                <button onClick={onClose} className="px-4 py-2 rounded-full text-white text-sm font-semibold" style={{ background: "var(--ms-primary)" }} data-testid="import-done-btn">Selesai</button>
+                <button onClick={resetAndClose} className="px-4 py-2 rounded-full text-white text-sm font-semibold" style={{ background: "var(--ms-primary)" }} data-testid="import-done-btn">Selesai</button>
               </div>
             </div>
           )}

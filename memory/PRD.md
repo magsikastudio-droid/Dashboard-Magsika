@@ -36,6 +36,20 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - Telegram reminder loop + test endpoint
 - Archive page
 
+## Implemented (iter 8 Phase A — Order quick wins, 2026-05-03) ✅
+- ✅ Inline status edit di tabel Orders — clickable dropdown per row, auto-save via PUT /api/orders/{id} (juga ada backup PATCH /api/orders/{id}/status endpoint)
+- ✅ Artist contribution % di OrderModal — parallel array `artist_contributions`, total must = 100 to save. UI: per-artist % input + total bar (green=100 / amber<100 / red>100) + remaining hint
+- ✅ Import CSV Orders — tombol "Import CSV" di toolbar, ImportCSVModal (portal-rendered):
+  - File picker + template download
+  - Auto-detect header → field mapping (heuristic aliases incl. indo terms)
+  - Manual re-map dropdown per kolom
+  - Preview table dengan skip-row checkbox, missing-required highlighted merah
+  - Required field warning (tanggal/klien/project)
+  - Bulk POST `/api/orders/import` → response {created, skipped, errors}
+  - Modal state reset on close
+- ✅ Backend endpoints baru: `PATCH /api/orders/{id}/status`, `POST /api/orders/import` (Order+OrderInput sekarang include artist_contributions)
+- ✅ Tested 10/10 pytest + frontend flows verified.
+
 ## Implemented (iter 7 — Tier 2 fixes 2, 2026-05-03) ✅
 - ✅ OrderModal artist row layout FIXED — changed flex → CSS grid `auto 1fr 110px auto` (badge | name | dropdown | delete). Name input 470px wide, dropdown 110px, no more collapsed input.
 - ✅ Freelance auto-sync EXTENDED — POST/PUT /api/orders now not only auto-creates `freelance_artists` but also auto-creates `freelance_projects` (linked via `order_ref_id=order.id`). Fee split evenly across Freelance artists. On PUT order update, order-driven fields (project, platform, tanggal, pic, status_project, fee) are refreshed but pembayaran fields (dp_amount, dp_date, pelunasan_date, status_bayar) are preserved (user-editable).
