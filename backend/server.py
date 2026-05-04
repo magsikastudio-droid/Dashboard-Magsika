@@ -71,6 +71,7 @@ class Order(BaseModel):
     status: str = "modeling"
     artists: List[str] = []
     artist_statuses: List[str] = []  # parallel array: "Tim" or "Freelance"
+    artist_contributions: List[float] = []  # parallel array: % contribution, total should be 100
     value: float = 0
     currency: str = "USD"  # USD or IDR
     paid: bool = False
@@ -92,6 +93,7 @@ class OrderInput(BaseModel):
     status: str = "modeling"
     artists: List[str] = []
     artist_statuses: List[str] = []
+    artist_contributions: List[float] = []
     value: float = 0
     currency: str = "USD"
     paid: bool = False
@@ -478,6 +480,76 @@ async def reassign_order(order_id_uuid: str, payload: ReassignInput, user: User 
     order = Order(**existing)
     await manager.broadcast({"type": "order.updated", "order": order.model_dump(mode="json")})
     return order
+
+class StatusPatch(BaseModel):
+    status: str
+
+@api_router.patch("/orders/{order_id_uuid}/status", response_model=Order)
+async def patch_order_status(order_id_uuid: str, payload: StatusPatch, user: User = Depends(get_current_user)):
+    existing = await db.orders.find_one({"id": order_id_uuid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Order not found")
+    await db.orders.update_one({"id": order_id_uuid}, {"$set": {"status": payload.status}})
+    existing["status"] = payload.status
+    order = Order(**existing)
+    await manager.broadcast({"type": "order.updated", "order": order.model_dump(mode="json")})
+    return order
+
+# ---------- CSV Import ----------
+class ImportRow(BaseModel):
+    tanggal: str = ""
+    deadline: str = ""
+    klien: str = ""
+    project: str = ""
+    platform: str = "Direct"
+    marketer: str = ""
+    jenis: str = "Modeling"
+    status: str = "modeling"
+    artists: List[str] = []
+    artist_statuses: List[str] = []
+    value: float = 0
+    currency: str = "USD"
+    fee_freelance: float = 0
+    paid: bool = False
+    order_id: str = ""
+    folder_code: str = ""
+    catatan: str = ""
+
+class ImportPayload(BaseModel):
+    rows: List[ImportRow]
+
+@api_router.post("/orders/import")
+async def import_orders(payload: ImportPayload, user: User = Depends(get_current_user)):
+    """Bulk-import orders. Rows that lack required fields (tanggal, klien, project) are skipped."""
+    created = 0
+    skipped = 0
+    errors = []
+    for idx, row in enumerate(payload.rows):
+        if not row.tanggal or not row.klien or not row.project:
+            skipped += 1
+            errors.append({"row": idx, "reason": "missing tanggal/klien/project"})
+            continue
+        try:
+            data = row.model_dump()
+            # Auto-generate folder_code if blank
+            if not data.get("folder_code"):
+                data["folder_code"] = await generate_folder_code(data["tanggal"], data["platform"], data["klien"], data["project"])
+                data["folder_code_manual"] = False
+            else:
+                data["folder_code_manual"] = True
+            if not data.get("deadline"):
+                data["deadline"] = data["tanggal"]
+            order = Order(**data)
+            doc = order.model_dump()
+            doc["created_at"] = doc["created_at"].isoformat()
+            await db.orders.insert_one(doc)
+            await manager.broadcast({"type": "order.created", "order": order.model_dump(mode="json")})
+            created += 1
+        except Exception as e:
+            skipped += 1
+            errors.append({"row": idx, "reason": str(e)})
+    return {"created": created, "skipped": skipped, "errors": errors[:20]}
+
 
 # ---------- Earning & Freelance aggregations ----------
 @api_router.get("/earnings")

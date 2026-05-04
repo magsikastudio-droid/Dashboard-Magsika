@@ -16,6 +16,7 @@ const empty = () => ({
   status: "Modeling",
   artists: [""],
   artist_statuses: ["Tim"],
+  artist_contributions: [100],
   value: 0,
   currency: "USD",
   paid: false,
@@ -42,7 +43,9 @@ export default function OrderModal({ open, onClose, order }) {
       const a = order.artists?.length ? order.artists : [""];
       const s = order.artist_statuses?.length ? order.artist_statuses : a.map(() => "Tim");
       while (s.length < a.length) s.push("Tim");
-      setForm({ ...empty(), ...order, artists: a, artist_statuses: s.slice(0, a.length) });
+      const c = order.artist_contributions?.length ? order.artist_contributions : a.map(() => Math.round(100 / a.length));
+      while (c.length < a.length) c.push(0);
+      setForm({ ...empty(), ...order, artists: a, artist_statuses: s.slice(0, a.length), artist_contributions: c.slice(0, a.length) });
     } else { setForm(empty()); }
   }, [order, open]);
 
@@ -96,8 +99,13 @@ export default function OrderModal({ open, onClose, order }) {
 
   const handleSave = async () => {
     if (!form.klien.trim() || !form.project.trim()) { toast.error("Klien & project wajib"); return; }
-    const cleanArtists = []; const cleanStatuses = [];
-    form.artists.forEach((a, i) => { if (a && a.trim()) { cleanArtists.push(a.trim()); cleanStatuses.push(form.artist_statuses[i] || "Tim"); } });
+    const cleanArtists = []; const cleanStatuses = []; const cleanContribs = [];
+    form.artists.forEach((a, i) => { if (a && a.trim()) { cleanArtists.push(a.trim()); cleanStatuses.push(form.artist_statuses[i] || "Tim"); cleanContribs.push(Number(form.artist_contributions[i]) || 0); } });
+    const sumContribs = cleanContribs.reduce((s, v) => s + v, 0);
+    if (cleanArtists.length > 0 && Math.abs(sumContribs - 100) > 0.01) {
+      toast.error(`Total kontribusi harus 100% (saat ini ${sumContribs}%)`);
+      return;
+    }
     const allTim = cleanStatuses.every((s) => s === "Tim");
     const payload = {
       ...form,
@@ -105,6 +113,7 @@ export default function OrderModal({ open, onClose, order }) {
       fee_freelance: allTim ? 0 : (Number(form.fee_freelance) || 0),
       artists: cleanArtists,
       artist_statuses: cleanStatuses,
+      artist_contributions: cleanContribs,
     };
     setSaving(true);
     try {
@@ -123,10 +132,12 @@ export default function OrderModal({ open, onClose, order }) {
     finally { setSendingNotif(false); }
   };
 
-  const addArtist = () => setForm({ ...form, artists: [...form.artists, ""], artist_statuses: [...form.artist_statuses, "Tim"] });
-  const removeArtist = (i) => setForm({ ...form, artists: form.artists.filter((_, idx) => idx !== i), artist_statuses: form.artist_statuses.filter((_, idx) => idx !== i) });
+  const addArtist = () => setForm({ ...form, artists: [...form.artists, ""], artist_statuses: [...form.artist_statuses, "Tim"], artist_contributions: [...form.artist_contributions, 0] });
+  const removeArtist = (i) => setForm({ ...form, artists: form.artists.filter((_, idx) => idx !== i), artist_statuses: form.artist_statuses.filter((_, idx) => idx !== i), artist_contributions: form.artist_contributions.filter((_, idx) => idx !== i) });
   const setArtist = (i, val) => { const a = [...form.artists]; a[i] = val; setForm({ ...form, artists: a }); };
   const setArtistStatus = (i, val) => { const s = [...form.artist_statuses]; s[i] = val; setForm({ ...form, artist_statuses: s }); };
+  const setArtistContrib = (i, val) => { const c = [...form.artist_contributions]; c[i] = Math.max(0, Math.min(100, Number(val) || 0)); setForm({ ...form, artist_contributions: c }); };
+  const totalContrib = (form.artist_contributions || []).reduce((s, v) => s + (Number(v) || 0), 0);
 
   const hasFreelance = form.artist_statuses.some((s) => s === "Freelance");
 
@@ -211,17 +222,32 @@ export default function OrderModal({ open, onClose, order }) {
             <div className={sectionH} style={{ color: "var(--ms-primary)" }}>👤 Tim Artist</div>
             <div className="space-y-2">
               {form.artists.map((a, i) => (
-                <div key={i} className="grid gap-2 items-center" style={{ gridTemplateColumns: "auto 1fr 110px auto" }} data-testid={`artist-row-${i}`}>
+                <div key={i} className="grid gap-2 items-center" style={{ gridTemplateColumns: "auto 1fr 100px 90px auto" }} data-testid={`artist-row-${i}`}>
                   <span className="text-[0.68rem] font-mono font-bold px-2.5 py-1 rounded-full bg-[var(--ms-primary-soft)] whitespace-nowrap" style={{ color: "var(--ms-primary)" }}>Artist&nbsp;{i + 1}</span>
                   <input className={inp + " min-w-0"} placeholder="Nama artist" value={a} onChange={(e) => setArtist(i, e.target.value)} data-testid={`input-artist-${i}`} />
                   <select className={inp} value={form.artist_statuses[i] || "Tim"} onChange={(e) => setArtistStatus(i, e.target.value)} data-testid={`select-artist-status-${i}`}>
                     {ARTIST_STATUS_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
+                  <div className="relative">
+                    <input type="number" min={0} max={100} className={inp + " pr-6 text-center"} value={form.artist_contributions[i] ?? 0} onChange={(e) => setArtistContrib(i, e.target.value)} data-testid={`input-contrib-${i}`} />
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[0.7rem] font-mono font-bold text-[var(--ms-text-muted)]">%</span>
+                  </div>
                   {form.artists.length > 1 ? (
                     <button onClick={() => removeArtist(i)} className="p-2 rounded-lg hover:bg-rose-50 text-rose-600" data-testid={`remove-artist-${i}`}><Trash2 size={14} /></button>
                   ) : <span className="w-8" />}
                 </div>
               ))}
+              {/* Total contribution bar */}
+              {form.artists.some((x) => x && x.trim()) && (
+                <div className="flex items-center gap-3 text-xs" data-testid="contrib-total-bar">
+                  <span className="font-mono font-semibold text-[var(--ms-text-muted)] whitespace-nowrap">Total kontribusi:</span>
+                  <div className="flex-1 h-2 rounded-full bg-[var(--ms-bg)] overflow-hidden">
+                    <div className="h-full transition-all" style={{ width: `${Math.min(100, totalContrib)}%`, background: totalContrib === 100 ? "#10b981" : totalContrib > 100 ? "#ef4444" : "#f59e0b" }} />
+                  </div>
+                  <span className={`font-mono font-bold whitespace-nowrap ${totalContrib === 100 ? "text-emerald-700" : totalContrib > 100 ? "text-rose-600" : "text-amber-600"}`} data-testid="contrib-total">{totalContrib}%</span>
+                  {totalContrib !== 100 && <span className="text-[0.68rem] text-[var(--ms-text-muted)]">{totalContrib < 100 ? `Kurang ${100 - totalContrib}%` : `Lebih ${totalContrib - 100}%`}</span>}
+                </div>
+              )}
               <button onClick={addArtist} className="w-full py-2 rounded-xl border-2 border-dashed border-[var(--ms-border)] text-sm font-semibold text-[var(--ms-text-muted)] hover:border-[var(--ms-primary)] hover:text-[var(--ms-primary)] transition-base flex items-center justify-center gap-1.5" data-testid="add-artist-btn">
                 <Plus size={14} /> Tambah artist
               </button>

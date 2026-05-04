@@ -1,0 +1,46 @@
+{
+  "summary": "Iter8 Phase A testing: backend 10/10 pytest pass; frontend critical compile error fixed and core flows verified end-to-end. PATCH /api/orders/{id}/status returns updated order (status='delivered', 200) and 404 for nonexistent id. POST/PUT /api/orders accept artist_contributions list and roundtrip via GET. Default empty [] confirmed when not provided. POST /api/orders/import: 2-row valid payload returns {created:2,skipped:0,errors:[]} with auto-generated folder_code; row missing klien is counted in skipped + errors[].reason mentions missing fields. Regression on /api/orders, /api/earnings, /api/freelance/artists all 200. FRONTEND: Import CSV button visible next to Export CSV; ImportCSVModal opens portal-rendered; download-template-btn triggers magsika-import-template.csv download; uploaded 2-row CSV → preview-table renders, mapping-warn ABSENT for recognised headers and PRESENT when headers don't include tanggal/klien/project; skip-row-0 reduces 'Import N baris' from 'Import 2 baris' → 'Import 1 baris'; clicking import yields 'Selesai • 2 Berhasil di-import'. Inline status select on Orders table updated 'Modeling' → 'Need Designer' and persists after refetch. Test data cleaned (2 CSVImportTest orders deleted via mongosh).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/orders/import", "issue": "Imported orders skip _sync_freelance_artists / Telegram new-order broadcast (only manager.broadcast). If artist_statuses contain 'Freelance', no auto freelance_artists/projects record created on import. Phase A is ambiguous on this — consider documenting."},
+      {"endpoint": "POST /api/orders/import", "issue": "ImportRow.tanggal default '' but row with empty deadline silently coerces deadline=tanggal — safe but may mask user data-entry issues. Consider 400 if both blank when the row is otherwise complete."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ImportCSVModal", "issue": "React Hooks violation: useMemo (buildPayload, line 102) was called AFTER early return `if (!open) return null;` (line 84). This produced an ESLint compile error overlay (react-hooks/rules-of-hooks) that blocked all interactions on /orders. FIXED by moving early-return below the useMemo + derived consts. Re-test after main agent reviews fix.", "selector": "[data-testid=import-csv-modal]", "priority": "HIGH"},
+      {"component": "ImportCSVModal", "issue": "After successful import → click 'Selesai' (import-done-btn) the modal closes but `result` state is NOT reset. Reopening Import CSV shows the previous success screen instead of the file picker — user must click 'Import file lain' or refresh. onClose handler should also reset raw/mapping/skip/result.", "selector": "[data-testid=import-done-btn]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter8.py",
+    "/app/test_reports/pytest/iter8_results.xml"
+  ],
+  "action_items": [
+    "Review the ImportCSVModal.jsx hooks-order fix (early return moved below useMemo). Ensure no other components have similar issues.",
+    "Reset Import modal state on close (raw=[], mapping={}, skip={}, result=null) so reopening starts fresh.",
+    "Decide whether CSV import should also trigger _sync_freelance_artists for Freelance-flagged rows (consistency with manual order creation)."
+  ],
+  "critical_code_review_comments": [
+    "ImportCSVModal.jsx: hooks were called conditionally (rules-of-hooks). Always declare ALL hooks before any early return. (Now fixed by testing agent.)",
+    "ImportCSVModal.jsx onClose: state not reset on close — UX papercut on second open after success.",
+    "Orders.jsx handleStatusChange uses updateOrder() (PUT /api/orders/{id}) instead of the new dedicated PATCH /api/orders/{id}/status endpoint. PATCH is implemented but unused in the inline flow. Per agent context note this is acceptable, but if PUT is the canonical path, the PATCH endpoint should either be removed or used.",
+    "ImportCSVModal autoMap: HEADER_ALIASES uses strict equality on lowercased header — 'tanggal order' or 'tanggal_pesanan' will fall through to __skip__. Consider .includes()/regex match for forgiveness, or document required header names."
+  ],
+  "updated_files": [
+    "/app/frontend/src/components/ImportCSVModal.jsx",
+    "/app/backend/tests/test_iter8.py",
+    "/app/test_reports/pytest/iter8_results.xml"
+  ],
+  "success_rate": {"backend": "100% (10/10 iter8 pytest)", "frontend": "85% — Import CSV upload→preview→skip-row→import flow + mapping-warn + download-template + inline status update all VERIFIED end-to-end. OrderModal artist_contributions block-on-mismatch / save-on-100 NOT executed in browser run due to script timeout after import-success state-persistence bug; logic is straightforward and well-covered by code review (handleSave line 103-108)."},
+  "test_credentials": "Seeded admin token sess_admin_iter8_1777856066074 (admin.iter8@magsika.test, role=admin). Bearer + cookie both work.",
+  "seed_data_creation": "Created during tests and CLEANED UP: ~7 Iter8 orders (CSVImportTestBase, CSVImportTestNoContrib, CSVImportTest x4 from import + UI), 0 freelance artists/projects (Tim only). Final mongosh cleanup deleted 2 residual CSVImportTest UI-imported orders.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter8 Phase A backend 100% green via /app/backend/tests/test_iter8.py. The critical CRA-blocking bug in ImportCSVModal (hooks-after-early-return) was fixed by the testing agent — main agent should verify and ideally also reset modal state on close. OrderModal contribution validation is in handleSave (line 103-108): clean artist filter → sum contribs → if !=100 toast error & return. Inline status uses updateOrder() (PUT) per Orders.jsx line 81, the dedicated PATCH endpoint exists but unused.",
+  "rca of the issue": "RCA — frontend compile failure: ImportCSVModal.jsx had `if (!open) return null;` before `useMemo(buildPayload, ...)`. React requires hooks to run in the same order on every render; conditional early-return-before-hook fails ESLint react-hooks/rules-of-hooks → CRA shows red overlay → all clicks blocked. Reproduce: open /orders before fix → red 'Compiled with problems' overlay. Mitigation: move early return to AFTER all hooks (useState, useRef, useMemo). Applied & verified — page now compiles clean and Import CSV upload flow works end-to-end."
+}
