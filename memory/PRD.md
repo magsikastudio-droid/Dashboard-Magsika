@@ -242,6 +242,30 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - 14/14 backend pytest pass. 100% frontend critical flows (nav, route, stats, filters, CRUD via UI, CSV download, settings persist, talent RBAC redirect)
 - Talent confirmed: nav has only nav-todo + nav-performance, direct /daily-chat redirects to /todo
 
+## Implemented (iter 12 — Daily Chat refinements, 2026-05-05) ✅
+
+### Nav reorder
+- ✅ Daily Chat moved from position #8 to position #2 (right after Dashboard, before Orders) — for both Admin and PM
+
+### Daily Chat page
+- ✅ Month selector dropdown alongside week arrows (auto-populated from data + current month)
+- ✅ Week chips W1..W5 within selected month (clickable to jump)
+- ✅ Stat cards Discussing / Follow Up-Nego / Place Order are now CLICKABLE — toggle status filter on click. Active card shows colored ring + "filter aktif" hint. Total Inbox & Conversion Rate remain non-interactive
+- ✅ Auto-fill Real = Agreed × 0.8 (20% Magsika/Eirene platform fee deduction). Triggered on agreed blur. Manual override still possible
+
+### Settings
+- ✅ "Kirim Pesan Test Daily Chat" button (POST /api/settings/test-dc-telegram) — sends sample reminder using current chats or fallback samples
+- ✅ Custom reminder hours input (comma-separated, e.g. "9, 12, 15, 18, 21") — backend `dc_reminder_hours: List[int]` replaces hardcoded constants. Empty/invalid hours = no auto reminder
+
+### Backend
+- ✅ Settings model + SettingsInput include `dc_reminder_hours: List[int]=[9,12,15,18,21]`
+- ✅ POST /api/settings/test-dc-telegram (admin only, 403 for talent)
+- ✅ daily_chat_reminder_loop reads dc_reminder_hours from settings (per-tick)
+- ✅ Extracted helper `build_dc_reminder_message()` reused by scheduler + test endpoint
+
+### Testing — iteration_12.json
+- 5/5 backend pytest pass, 13/13 frontend behaviors pass. No bugs.
+
 ## Backlog (P1/P2)
 
 ### Tier 2 (next)
