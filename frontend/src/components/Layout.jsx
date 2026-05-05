@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, WifiOff, Dice5, Settings as SettingsIcon, TrendingUp, Palette, Archive, RefreshCw, CheckSquare, Award } from "lucide-react";
+import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, WifiOff, Dice5, Settings as SettingsIcon, TrendingUp, Palette, RefreshCw, CheckSquare, Award, ChevronDown } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useOrders } from "../context/OrdersContext";
 import { useCurrency } from "../context/CurrencyContext";
@@ -18,7 +18,6 @@ const NAV_BY_ROLE = {
     { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
     { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
     { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
-    { to: "/archive", label: "Arsip", icon: Archive, testid: "nav-archive" },
   ],
   pm: [
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
@@ -29,7 +28,6 @@ const NAV_BY_ROLE = {
     { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
     { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
     { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
-    { to: "/archive", label: "Arsip", icon: Archive, testid: "nav-archive" },
   ],
   talent: [
     { to: "/todo", label: "To Do", icon: CheckSquare, testid: "nav-todo" },
@@ -43,6 +41,7 @@ export default function Layout({ children }) {
   const { rate, display, updateRate, setDisplayCurrency } = useCurrency();
   const navigate = useNavigate();
   const [showRate, setShowRate] = useState(false);
+  const [showGearMenu, setShowGearMenu] = useState(false);
   const [rateInput, setRateInput] = useState(rate);
 
   const navItems = NAV_BY_ROLE[user?.role] || NAV_BY_ROLE.talent;
@@ -83,7 +82,7 @@ export default function Layout({ children }) {
                   <button onClick={() => setDisplayCurrency("USD")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "USD" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-usd-btn">$ USD</button>
                   <button onClick={() => setDisplayCurrency("IDR")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "IDR" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-idr-btn">Rp IDR</button>
                 </div>
-                <button onClick={() => setShowRate(!showRate)} className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--ms-bg)] border border-[var(--ms-border)] text-[0.68rem] font-mono font-semibold hover:bg-white transition-base" data-testid="rate-btn" title="Atur kurs">
+                <button onClick={() => { setShowRate(!showRate); setRateInput(rate); }} className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--ms-bg)] border border-[var(--ms-border)] text-[0.68rem] font-mono font-semibold hover:bg-white transition-base" data-testid="rate-btn" title="Atur kurs">
                   <RefreshCw size={11} /> 1$ = Rp{Math.round(rate).toLocaleString("id-ID")}
                 </button>
               </>
@@ -109,7 +108,29 @@ export default function Layout({ children }) {
                   <span className="text-[0.7rem] font-semibold hidden md:inline">{user.name || user.email}</span>
                   <span className="text-[0.58rem] font-bold font-mono px-1.5 py-0 rounded-full text-white" style={{ background: ROLE_COLORS[user.role] }} data-testid="user-role-badge">{ROLE_LABELS[user.role]}</span>
                 </div>
-                {isAdmin && <NavLink to="/settings" className="p-2 rounded-full hover:bg-[var(--ms-bg)] text-[var(--ms-text-muted)]" data-testid="gear-icon" title="Settings"><SettingsIcon size={16} /></NavLink>}
+                {isAdmin && (
+                  <div className="relative">
+                    <button onClick={() => setShowGearMenu((v) => !v)} className="p-2 rounded-full hover:bg-[var(--ms-bg)] text-[var(--ms-text-muted)] flex items-center gap-0.5" data-testid="gear-icon" title="Settings">
+                      <SettingsIcon size={16} />
+                      <ChevronDown size={11} className={`transition-transform ${showGearMenu ? "rotate-180" : ""}`} />
+                    </button>
+                    {showGearMenu && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowGearMenu(false)} />
+                        <div className="absolute right-0 mt-2 w-56 bg-white border border-[var(--ms-border)] rounded-2xl shadow-lg overflow-hidden z-50" data-testid="gear-dropdown">
+                          <button onClick={() => { setShowGearMenu(false); navigate("/settings"); }} className="w-full text-left px-4 py-2.5 hover:bg-[var(--ms-bg)] text-sm font-medium flex items-center gap-2.5 border-b border-[var(--ms-border)]" data-testid="menu-general-settings">
+                            <SettingsIcon size={14} className="text-[var(--ms-text-muted)]" /> General Settings
+                          </button>
+                          <button onClick={() => { setShowGearMenu(false); setShowRate(true); setRateInput(rate); }} className="w-full text-left px-4 py-2.5 hover:bg-[var(--ms-bg)] text-sm font-medium flex items-center gap-2.5" data-testid="menu-currency-rate">
+                            <RefreshCw size={14} className="text-[var(--ms-text-muted)]" />
+                            <span className="flex-1">Kurs USD/IDR</span>
+                            <span className="text-[0.65rem] font-mono text-[var(--ms-text-muted)]">1$ = Rp{Math.round(rate).toLocaleString("id-ID")}</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <button onClick={logout} className="p-2 rounded-full hover:bg-[var(--ms-bg)] text-[var(--ms-text-muted)] transition-base" data-testid="logout-btn"><LogOut size={16} /></button>
               </div>
             )}

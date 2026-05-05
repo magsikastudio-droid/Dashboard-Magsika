@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Dice5, Gem, CheckCircle2, Hourglass, Wallet, AlertTriangle, Briefcase, ArrowRight, Calendar, TrendingUp, TrendingDown } from "lucide-react";
+import { Dice5, Gem, CheckCircle2, Hourglass, Wallet, AlertTriangle, Briefcase, ArrowRight, Calendar, TrendingUp, TrendingDown, Clock, X } from "lucide-react";
 import { useOrders } from "../context/OrdersContext";
 import { useCurrency } from "../context/CurrencyContext";
-import { isLate, monthKey, monthLabel, currentMonth } from "../lib/format";
+import { isLate, monthKey, monthLabel, currentMonth, daysToDeadline, isDone } from "../lib/format";
 import { PLATFORM_COLORS, DONE_STATUSES } from "../lib/constants";
 
 const StatCard = ({ icon: Icon, label, value, sub, accent, testid, trend }) => (
@@ -40,6 +40,8 @@ export default function Dashboard() {
   const { fmt, convert, display } = useCurrency();
   const navigate = useNavigate();
   const [month, setMonth] = useState(currentMonth());
+  const [dismissedLate, setDismissedLate] = useState(false);
+  const [dismissedSoon, setDismissedSoon] = useState(false);
 
   const bulanList = useMemo(() => {
     const m = new Set(orders.map((o) => monthKey(o.tanggal)).filter(Boolean));
@@ -65,8 +67,14 @@ export default function Dashboard() {
     const onProgressValue = totalValue - doneValue;
     const unpaid = sumValue(monthOrders.filter((o) => !o.paid));
     const totalFee = sumFee(monthOrders);
-    const late = monthOrders.filter((o) => isLate(o.deadline, o.status));
-    return { total, done, onProgress, totalValue, doneValue, onProgressValue, unpaid, late, totalFee, net: totalValue - totalFee };
+      const late = monthOrders.filter((o) => isLate(o.deadline, o.status));
+      // Approaching deadline: not done + not overdue + within 3 days
+      const approaching = orders.filter((o) => {
+        if (isDone(o.status)) return false;
+        const d = daysToDeadline(o.deadline);
+        return d !== null && d >= 0 && d <= 3;
+      });
+      return { total, done, onProgress, totalValue, doneValue, onProgressValue, unpaid, late, approaching, totalFee, net: totalValue - totalFee };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [monthOrders, display]);
 
@@ -152,15 +160,36 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {stats.late.length > 0 && month === currentMonth() && (
-        <div className="flex gap-3 items-start bg-rose-50 border border-rose-200 rounded-2xl p-4" data-testid="late-banner">
+      {stats.late.length > 0 && month === currentMonth() && !dismissedLate && (
+        <div className="flex gap-3 items-start bg-rose-50 border border-rose-200 rounded-2xl p-4 relative" data-testid="late-banner">
           <div className="w-9 h-9 rounded-xl bg-rose-100 flex-shrink-0 flex items-center justify-center text-rose-600">
             <AlertTriangle size={18} />
           </div>
-          <div className="flex-1 text-sm text-rose-800 leading-relaxed">
+          <div className="flex-1 text-sm text-rose-800 leading-relaxed pr-7">
             <strong className="font-bold">{stats.late.length} project LEWAT deadline!</strong>{" "}
             <span className="text-rose-700">{stats.late.map((o) => o.project).join(", ")}</span>
           </div>
+          <button onClick={() => setDismissedLate(true)} className="absolute top-3 right-3 p-1 rounded-full hover:bg-rose-100 text-rose-600 transition-base" data-testid="dismiss-late" title="Tutup notifikasi">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {stats.approaching.length > 0 && !dismissedSoon && (
+        <div className="flex gap-3 items-start bg-amber-50 border border-amber-200 rounded-2xl p-4 relative" data-testid="soon-banner">
+          <div className="w-9 h-9 rounded-xl bg-amber-100 flex-shrink-0 flex items-center justify-center text-amber-600">
+            <Clock size={18} />
+          </div>
+          <div className="flex-1 text-sm text-amber-900 leading-relaxed pr-7">
+            <strong className="font-bold">{stats.approaching.length} project mendekati deadline</strong> (≤ 3 hari):{" "}
+            <span className="text-amber-800">{stats.approaching.map((o) => {
+              const d = daysToDeadline(o.deadline);
+              return `${o.project} (${d === 0 ? "hari ini" : d === 1 ? "besok" : `${d} hari lagi`})`;
+            }).join(", ")}</span>
+          </div>
+          <button onClick={() => setDismissedSoon(true)} className="absolute top-3 right-3 p-1 rounded-full hover:bg-amber-100 text-amber-700 transition-base" data-testid="dismiss-soon" title="Tutup notifikasi">
+            <X size={14} />
+          </button>
         </div>
       )}
 

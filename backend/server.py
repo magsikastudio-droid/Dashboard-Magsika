@@ -131,6 +131,7 @@ class Settings(BaseModel):
     allowed_emails: List[str] = []
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    telegram_thread_id: Optional[int] = None
     reminders_enabled: bool = True
     exchange_rate: float = 16000  # IDR per USD
     telegram_templates: dict = {}
@@ -139,6 +140,7 @@ class SettingsInput(BaseModel):
     allowed_emails: List[str] = []
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    telegram_thread_id: Optional[int] = None
     reminders_enabled: bool = True
     exchange_rate: float = 16000
     telegram_templates: dict = {}
@@ -508,6 +510,10 @@ async def create_order(payload: OrderInput, user: User = Depends(get_current_use
     if not data.get("folder_code") or not data.get("folder_code_manual"):
         data["folder_code"] = await generate_folder_code(data["tanggal"], data["platform"], data["klien"], data["project"])
         data["folder_code_manual"] = False
+    # Folder code uniqueness check
+    fc = (data.get("folder_code") or "").strip()
+    if fc and await db.orders.find_one({"folder_code": fc}, {"_id": 0}):
+        raise HTTPException(409, f"Folder code '{fc}' sudah dipakai. Harap gunakan kode lain.")
     order = Order(**data)
     doc = order.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
@@ -520,12 +526,13 @@ async def create_order(payload: OrderInput, user: User = Depends(get_current_use
         s = await get_settings_doc()
         token = s.get("telegram_bot_token", "")
         chat_id = s.get("telegram_chat_id", "")
+        thread_id = s.get("telegram_thread_id")
         if token and chat_id:
             msg = render_tg_template(s, "new", {
                 "project": order.project, "klien": order.klien,
                 "folder_code": order.folder_code, "deadline": order.deadline,
             })
-            send_telegram(token, chat_id, msg)
+            send_telegram(token, chat_id, msg, thread_id)
     except Exception as e:
         logger.warning(f"auto new-order telegram failed: {e}")
     return order
@@ -622,6 +629,10 @@ async def update_order(order_id_uuid: str, payload: OrderInput, user: User = Dep
         update_data["folder_code_manual"] = False
     else:
         update_data["folder_code"] = existing.get("folder_code", "")
+    # Folder code uniqueness check (skip self)
+    fc = (update_data.get("folder_code") or "").strip()
+    if fc and await db.orders.find_one({"folder_code": fc, "id": {"$ne": order_id_uuid}}, {"_id": 0}):
+        raise HTTPException(409, f"Folder code '{fc}' sudah dipakai. Harap gunakan kode lain.")
     await db.orders.update_one({"id": order_id_uuid}, {"$set": update_data})
     merged = {**existing, **update_data}
     order = Order(**merged)
@@ -659,7 +670,7 @@ async def notify_order(order_id_uuid: str, payload: NotifyInput, user: User = De
     t = payload.type
     kind = t if t in ("new", "reminder", "warning", "custom") else "custom"
     msg = render_tg_template(s, kind, common_vars)
-    ok = send_telegram(token, chat_id, msg)
+    ok = send_telegram(token, chat_id, msg, s.get("telegram_thread_id"))
     if not ok:
         raise HTTPException(500, "Gagal kirim Telegram")
     return {"ok": True, "type": t, "days_left": days_left}
@@ -971,13 +982,15 @@ class TaskInput(BaseModel):
     assignee_type: str = "tim"  # "tim" | "freelance"
     folder_code: str = ""
     order_id: str = ""
-    status: str = "pending"  # pending | in_progress | done
+    status: str = "pending"  # pending | in_progress | done | failed
+    notes: str = ""
 
 class TaskPatch(BaseModel):
     status: Optional[str] = None
     title: Optional[str] = None
     assignee: Optional[str] = None
     assignee_type: Optional[str] = None
+    notes: Optional[str] = None
 
 async def _auto_generate_tasks(date: str):
     """For each active order (status != done/delivered/cancel), ensure a task exists for {date} per artist."""
@@ -1052,34 +1065,54 @@ async def patch_task(task_id: str, payload: TaskPatch, user: User = Depends(get_
     existing = await db.tasks.find_one({"id": task_id}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Task not found")
-    # Talent can only edit tasks assigned to them (by name match on email prefix OR name)
+    # Talent allowed to update status/notes for any task (per user req).
+    # Edit title/assignee/assignee_type still restricted to admin/pm.
     if user.role == "talent":
-        if (existing.get("assignee") or "").lower() not in (user.name.lower(), user.email.split("@")[0].lower()):
-            raise HTTPException(403, "Hanya bisa update task milik sendiri")
+        if payload.title is not None or payload.assignee is not None or payload.assignee_type is not None:
+            raise HTTPException(403, "Talent hanya bisa update status & notes")
     upd = {}
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
     if payload.status is not None:
         cur = existing.get("status", "pending")
         new = payload.status
+        if new not in ("pending", "in_progress", "done", "failed"):
+            raise HTTPException(400, "Status tidak valid")
         upd["status"] = new
+        # Accumulated elapsed timer
+        elapsed = int(existing.get("elapsed_seconds") or 0)
+        if cur == "in_progress" and existing.get("started_at"):
+            try:
+                start_dt = datetime.fromisoformat(existing["started_at"])
+                elapsed += int((now - start_dt).total_seconds())
+            except Exception:
+                pass
+
         if new == "in_progress" and cur != "in_progress":
             upd["started_at"] = now_iso
-        if new == "done" and cur != "done":
-            upd["completed_at"] = now_iso
-            if existing.get("started_at"):
-                start_dt = datetime.fromisoformat(existing["started_at"])
-                dur = (datetime.now(timezone.utc) - start_dt).total_seconds()
-                upd["duration_seconds"] = int(max(0, dur))
-        if new == "pending":
+            upd["elapsed_seconds"] = elapsed
+        elif new == "in_progress" and cur == "in_progress":
+            pass  # already running
+        elif new == "pending":
+            # Pause but DON'T reset accumulated time
             upd["started_at"] = ""
-            upd["completed_at"] = ""
-            upd["duration_seconds"] = 0
+            upd["elapsed_seconds"] = elapsed
+        elif new == "done":
+            upd["started_at"] = ""
+            upd["completed_at"] = now_iso
+            upd["elapsed_seconds"] = elapsed
+            upd["duration_seconds"] = elapsed  # mirrored for compat
+        elif new == "failed":
+            upd["started_at"] = ""
+            upd["elapsed_seconds"] = elapsed
     if payload.title is not None:
         upd["title"] = payload.title
     if payload.assignee is not None:
         upd["assignee"] = payload.assignee
     if payload.assignee_type is not None:
         upd["assignee_type"] = payload.assignee_type
+    if payload.notes is not None:
+        upd["notes"] = payload.notes
     if upd:
         await db.tasks.update_one({"id": task_id}, {"$set": upd})
     doc = await db.tasks.find_one({"id": task_id}, {"_id": 0})
@@ -1183,7 +1216,7 @@ async def test_telegram(user: User = Depends(require_admin)):
     chat_id = s.get("telegram_chat_id", "")
     if not token or not chat_id:
         raise HTTPException(400, "Telegram belum dikonfigurasi")
-    ok = send_telegram(token, chat_id, "✅ Magsika Studio: Test reminder Telegram OK!")
+    ok = send_telegram(token, chat_id, "✅ Magsika Studio: Test reminder Telegram OK!", s.get("telegram_thread_id"))
     if not ok:
         raise HTTPException(400, "Gagal kirim pesan test")
     return {"ok": True}
@@ -1201,15 +1234,20 @@ REMINDER_THRESHOLDS = [
 ]
 DONE_STATUSES = {"done", "delivered", "cancel", "cancle"}
 
-def send_telegram(token: str, chat_id: str, text: str) -> bool:
+def send_telegram(token: str, chat_id: str, text: str, thread_id: Optional[int] = None) -> bool:
     if not token or not chat_id:
         return False
     try:
+        data = {"chat_id": chat_id, "text": text}
+        if thread_id:
+            data["message_thread_id"] = thread_id
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": text},
+            data=data,
             timeout=15,
         )
+        if r.status_code != 200:
+            logger.warning(f"Telegram non-200: {r.status_code} {r.text[:200]}")
         return r.status_code == 200
     except Exception as e:
         logger.warning(f"Telegram error: {e}")
@@ -1223,6 +1261,7 @@ async def reminder_loop():
                 await asyncio.sleep(600); continue
             token = settings_doc.get("telegram_bot_token", "")
             chat_id = settings_doc.get("telegram_chat_id", "")
+            thread_id = settings_doc.get("telegram_thread_id")
             if not token or not chat_id:
                 await asyncio.sleep(600); continue
 
@@ -1236,11 +1275,29 @@ async def reminder_loop():
                     deadline_dt = datetime.fromisoformat(o["deadline"]).replace(tzinfo=timezone.utc).replace(hour=23, minute=59)
                 except Exception:
                     continue
-                if deadline_dt < now:
-                    continue
                 remaining = deadline_dt - now
+                # Negative remaining → overdue. Send "overdue" once per day.
+                if remaining.total_seconds() < 0:
+                    days_overdue = (-remaining.days) or 1
+                    key = f"{o['id']}::overdue::{now.strftime('%Y-%m-%d')}"
+                    sent = await db.sent_reminders.find_one({"_id": key})
+                    if sent:
+                        continue
+                    common = (
+                        f"📁 Project   : {o['project']}\n"
+                        f"👤 Client    : {o['klien']}\n"
+                        f"📂 Folder    : {o.get('folder_code', '')}\n"
+                        f"📅 Deadline  : {o['deadline']}\n"
+                    )
+                    msg = f"🚨 OVERDUE — DEADLINE LEWAT\n\n{common}❗ Sudah lewat {days_overdue} hari! Status: {o.get('status', '-')}. Harap segera diselesaikan."
+                    ok = send_telegram(token, chat_id, msg, thread_id)
+                    if ok:
+                        await db.sent_reminders.insert_one({"_id": key, "sent_at": now.isoformat()})
+                        logger.info(f"Telegram overdue sent: {key}")
+                    continue
                 for label, threshold in REMINDER_THRESHOLDS:
-                    if abs((remaining - threshold).total_seconds()) > 1800:
+                    # Match within a 1-hour window of threshold to allow loop interval slack
+                    if abs((remaining - threshold).total_seconds()) > 3600:
                         continue
                     key = f"{o['id']}::{label}"
                     sent = await db.sent_reminders.find_one({"_id": key})
@@ -1255,18 +1312,26 @@ async def reminder_loop():
                     }
                     kind = "warning" if label == "1d" else "reminder"
                     msg = render_tg_template(settings_doc, kind, vars_)
-                    ok = send_telegram(token, chat_id, msg)
+                    ok = send_telegram(token, chat_id, msg, thread_id)
                     if ok:
                         await db.sent_reminders.insert_one({"_id": key, "sent_at": now.isoformat()})
                         logger.info(f"Telegram reminder sent: {key}")
         except Exception as e:
             logger.exception(f"reminder_loop error: {e}")
+        await asyncio.sleep(1800)  # check every 30 minutes
 
 async def daily_task_generator_loop():
-    """Every hour, ensure today has auto-generated tasks. Runs at boot and catches 00:00 rollover."""
+    """Every hour, ensure today has auto-generated tasks. Also auto-fail tasks from previous days that are not done."""
     while True:
         try:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # Auto-fail any task from a past date that's still pending or in_progress
+            res = await db.tasks.update_many(
+                {"date": {"$lt": today}, "status": {"$in": ["pending", "in_progress"]}},
+                {"$set": {"status": "failed", "started_at": ""}},
+            )
+            if res.modified_count:
+                logger.info(f"Auto-failed {res.modified_count} expired tasks from past dates")
             count = await db.tasks.count_documents({"date": today})
             if count == 0:
                 n = await _auto_generate_tasks(today)

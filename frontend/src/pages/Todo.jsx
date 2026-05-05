@@ -11,6 +11,7 @@ const STATUS_META = {
   pending: { label: "Pending", bg: "bg-slate-100", text: "text-slate-700", dot: "#64748b", icon: Circle },
   in_progress: { label: "In Progress", bg: "bg-amber-100", text: "text-amber-700", dot: "#f59e0b", icon: Play },
   done: { label: "Done", bg: "bg-emerald-100", text: "text-emerald-700", dot: "#10b981", icon: CheckCircle2 },
+  failed: { label: "Gagal", bg: "bg-rose-100", text: "text-rose-700", dot: "#ef4444", icon: X },
 };
 
 const fmtDuration = (sec) => {
@@ -41,7 +42,10 @@ export default function Todo() {
   const [showAdd, setShowAdd] = useState(false);
 
   const canAdd = user?.role === "admin" || user?.role === "pm";
-  const isTalent = user?.role === "talent";
+  const canEditMeta = user?.role === "admin"; // edit title/assignee — admin only
+  const canDelete = user?.role === "admin" || user?.role === "pm";
+  // Talent can update status of any task (per user req)
+  const canChangeStatus = (_t) => true;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -52,16 +56,8 @@ export default function Todo() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Filter for Talent: only tasks where assignee matches their name or email prefix
-  const visible = useMemo(() => {
-    if (!isTalent) return tasks;
-    const myName = (user?.name || "").toLowerCase();
-    const myHandle = (user?.email || "").split("@")[0].toLowerCase();
-    return tasks.filter((t) => {
-      const a = (t.assignee || "").toLowerCase();
-      return a === myName || a === myHandle;
-    });
-  }, [tasks, isTalent, user]);
+  // Show all tasks for everyone (Talent sees all per user request)
+  const visible = tasks;
 
   const grouped = useMemo(() => {
     const tim = {}; const free = {};
@@ -74,18 +70,7 @@ export default function Todo() {
     return { tim, free };
   }, [visible]);
 
-  const canEditTask = (t) => {
-    if (user?.role === "admin" || user?.role === "pm") return true;
-    if (user?.role === "talent") {
-      const myName = (user?.name || "").toLowerCase();
-      const myHandle = (user?.email || "").split("@")[0].toLowerCase();
-      return (t.assignee || "").toLowerCase() === myName || (t.assignee || "").toLowerCase() === myHandle;
-    }
-    return false;
-  };
-
   const setTaskStatus = async (t, newStatus) => {
-    if (!canEditTask(t)) return;
     try {
       const r = await api.patch(`/tasks/${t.id}`, { status: newStatus });
       setTasks((prev) => prev.map((x) => x.id === t.id ? r.data : x));
@@ -96,17 +81,22 @@ export default function Todo() {
   };
 
   const removeTask = async (t) => {
-    if (!canAdd) return;
+    if (!canDelete) return;
     if (!window.confirm(`Hapus task "${t.title}"?`)) return;
     try { await api.delete(`/tasks/${t.id}`); setTasks((prev) => prev.filter((x) => x.id !== t.id)); } catch { toast.error("Gagal"); }
   };
+
+  const [editingTask, setEditingTask] = useState(null);
 
   const stats = useMemo(() => ({
     total: visible.length,
     done: visible.filter((t) => t.status === "done").length,
     inProgress: visible.filter((t) => t.status === "in_progress").length,
     pending: visible.filter((t) => t.status === "pending").length,
+    failed: visible.filter((t) => t.status === "failed").length,
   }), [visible]);
+
+  const isTalent = user?.role === "talent";
 
   return (
     <div className="space-y-5" data-testid="todo-page">
@@ -131,11 +121,12 @@ export default function Todo() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <StatC label="Total" value={stats.total} color="#6d4cff" />
         <StatC label="Pending" value={stats.pending} color="#64748b" />
         <StatC label="In Progress" value={stats.inProgress} color="#f59e0b" />
         <StatC label="Done" value={stats.done} color="#10b981" />
+        <StatC label="Gagal" value={stats.failed} color="#ef4444" />
       </div>
 
       {loading ? (
@@ -148,12 +139,13 @@ export default function Todo() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <GroupSection title="Tim Internal" icon={Users} color="#6d4cff" groups={grouped.tim} setTaskStatus={setTaskStatus} removeTask={removeTask} canEditTask={canEditTask} canAdd={canAdd} />
-          <GroupSection title="Freelance" icon={Palette} color="#f59e0b" groups={grouped.free} setTaskStatus={setTaskStatus} removeTask={removeTask} canEditTask={canEditTask} canAdd={canAdd} />
+          <GroupSection title="Tim Internal" icon={Users} color="#6d4cff" groups={grouped.tim} setTaskStatus={setTaskStatus} removeTask={removeTask} setEditingTask={setEditingTask} canEditMeta={canEditMeta} canDelete={canDelete} />
+          <GroupSection title="Freelance" icon={Palette} color="#f59e0b" groups={grouped.free} setTaskStatus={setTaskStatus} removeTask={removeTask} setEditingTask={setEditingTask} canEditMeta={canEditMeta} canDelete={canDelete} />
         </div>
       )}
 
       {showAdd && <AddTaskModal onClose={() => setShowAdd(false)} date={date} onSaved={(t) => { setTasks((prev) => [...prev, t]); setShowAdd(false); }} />}
+      {editingTask && <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} onSaved={(t) => { setTasks((prev) => prev.map((x) => x.id === t.id ? t : x)); setEditingTask(null); }} />}
     </div>
   );
 }
@@ -165,7 +157,7 @@ const StatC = ({ label, value, color }) => (
   </div>
 );
 
-function GroupSection({ title, icon: Icon, color, groups, setTaskStatus, removeTask, canEditTask, canAdd }) {
+function GroupSection({ title, icon: Icon, color, groups, setTaskStatus, removeTask, setEditingTask, canEditMeta, canDelete }) {
   const entries = Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
   return (
     <div className="bg-white rounded-2xl border border-[var(--ms-border)] overflow-hidden" data-testid={`section-${title.toLowerCase().replace(" ", "-")}`}>
@@ -186,7 +178,7 @@ function GroupSection({ title, icon: Icon, color, groups, setTaskStatus, removeT
                 <span className="text-[0.6rem] font-mono text-[var(--ms-text-muted)]">· {list.length} task</span>
               </div>
               <div className="space-y-1.5 pl-9">
-                {list.map((t) => <TaskRow key={t.id} task={t} setTaskStatus={setTaskStatus} removeTask={removeTask} canEdit={canEditTask(t)} canDelete={canAdd} />)}
+                {list.map((t) => <TaskRow key={t.id} task={t} setTaskStatus={setTaskStatus} removeTask={removeTask} setEditingTask={setEditingTask} canEditMeta={canEditMeta} canDelete={canDelete} />)}
               </div>
             </div>
           ))}
@@ -196,28 +188,80 @@ function GroupSection({ title, icon: Icon, color, groups, setTaskStatus, removeT
   );
 }
 
-function TaskRow({ task, setTaskStatus, removeTask, canEdit, canDelete }) {
+function TaskRow({ task, setTaskStatus, removeTask, setEditingTask, canEditMeta, canDelete }) {
   const meta = STATUS_META[task.status] || STATUS_META.pending;
-  const elapsed = task.status === "in_progress" && task.started_at ? Math.floor((Date.now() - new Date(task.started_at).getTime()) / 1000) : task.duration_seconds;
+  // Compute live elapsed seconds
+  const baseElapsed = Number(task.elapsed_seconds || task.duration_seconds || 0);
+  const live = task.status === "in_progress" && task.started_at
+    ? baseElapsed + Math.max(0, Math.floor((Date.now() - new Date(task.started_at).getTime()) / 1000))
+    : baseElapsed;
   return (
-    <div className="flex items-center gap-2 p-2 rounded-lg bg-[var(--ms-bg)] hover:bg-white hover:shadow-sm transition-base" data-testid={`task-${task.id}`}>
-      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.62rem] font-bold ${meta.bg} ${meta.text}`}>
+    <div className="flex items-start gap-2 p-2 rounded-lg bg-[var(--ms-bg)] hover:bg-white hover:shadow-sm transition-base" data-testid={`task-${task.id}`}>
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.62rem] font-bold flex-shrink-0 ${meta.bg} ${meta.text}`}>
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: meta.dot }} />{meta.label}
       </span>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-semibold truncate" title={task.title}>{task.title}</div>
+        {task.notes && <div className="text-[0.65rem] text-[var(--ms-text-muted)] mt-0.5 line-clamp-2 whitespace-pre-wrap" data-testid={`task-notes-${task.id}`}>{task.notes}</div>}
         {task.folder_code && <div className="text-[0.6rem] font-mono text-[var(--ms-text-muted)] truncate">{task.folder_code}</div>}
       </div>
-      {elapsed > 0 && <span className="text-[0.62rem] font-mono text-[var(--ms-text-muted)] whitespace-nowrap">{fmtDuration(elapsed)}</span>}
-      {canEdit && (
-        <div className="flex gap-0.5">
-          {task.status !== "pending" && <button onClick={() => setTaskStatus(task, "pending")} className="p-1 rounded hover:bg-slate-200" title="Reset ke Pending" data-testid={`btn-pending-${task.id}`}><RotateCcw size={11} /></button>}
-          {task.status !== "in_progress" && <button onClick={() => setTaskStatus(task, "in_progress")} className="p-1 rounded hover:bg-amber-100 text-amber-700" title="Mulai" data-testid={`btn-start-${task.id}`}><Play size={11} /></button>}
-          {task.status !== "done" && <button onClick={() => setTaskStatus(task, "done")} className="p-1 rounded hover:bg-emerald-100 text-emerald-700" title="Selesai" data-testid={`btn-done-${task.id}`}><CheckCircle2 size={11} /></button>}
-          {canDelete && <button onClick={() => removeTask(task)} className="p-1 rounded hover:bg-rose-100 text-rose-600" title="Hapus"><X size={11} /></button>}
-        </div>
-      )}
+      {live > 0 && <span className="text-[0.62rem] font-mono text-[var(--ms-text-muted)] whitespace-nowrap mt-0.5" data-testid={`task-elapsed-${task.id}`}>{fmtDuration(live)}</span>}
+      <div className="flex gap-0.5 flex-shrink-0">
+        {task.status !== "pending" && task.status !== "failed" && <button onClick={() => setTaskStatus(task, "pending")} className="p-1 rounded hover:bg-slate-200" title="Pause / kembalikan ke Pending" data-testid={`btn-pending-${task.id}`}><Pause size={11} /></button>}
+        {task.status !== "in_progress" && task.status !== "failed" && <button onClick={() => setTaskStatus(task, "in_progress")} className="p-1 rounded hover:bg-amber-100 text-amber-700" title="Start / lanjutkan" data-testid={`btn-start-${task.id}`}><Play size={11} /></button>}
+        {task.status !== "done" && task.status !== "failed" && <button onClick={() => setTaskStatus(task, "done")} className="p-1 rounded hover:bg-emerald-100 text-emerald-700" title="Selesai" data-testid={`btn-done-${task.id}`}><CheckCircle2 size={11} /></button>}
+        {canEditMeta && <button onClick={() => setEditingTask(task)} className="p-1 rounded hover:bg-blue-100 text-blue-700" title="Edit (admin)" data-testid={`btn-edit-${task.id}`}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>}
+        {canDelete && <button onClick={() => removeTask(task)} className="p-1 rounded hover:bg-rose-100 text-rose-600" title="Hapus"><X size={11} /></button>}
+      </div>
     </div>
+  );
+}
+
+function EditTaskModal({ task, onClose, onSaved }) {
+  const [title, setTitle] = useState(task.title || "");
+  const [assignee, setAssignee] = useState(task.assignee || "");
+  const [assigneeType, setAssigneeType] = useState(task.assignee_type || "tim");
+  const [notes, setNotes] = useState(task.notes || "");
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try { const r = await api.patch(`/tasks/${task.id}`, { title, assignee, assignee_type: assigneeType, notes }); toast.success("Tersimpan"); onSaved(r.data); }
+    catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
+    finally { setSaving(false); }
+  };
+  const inp = "w-full px-3 py-2 rounded-lg border border-[var(--ms-border)] bg-white text-sm focus:outline-none focus:border-[var(--ms-primary)]";
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] bg-black/50 backdrop-blur-md flex items-start justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="edit-task-modal">
+      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-lg p-6 my-6 space-y-3">
+        <div className="flex items-center justify-between"><h3 className="font-display text-xl font-bold">Edit Task</h3><button onClick={onClose} className="p-1 rounded hover:bg-[var(--ms-bg)]"><X size={16} /></button></div>
+        <div>
+          <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Title</div>
+          <input className={inp} value={title} onChange={(e) => setTitle(e.target.value)} data-testid="edit-task-title" />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Assignee</div>
+            <input className={inp} value={assignee} onChange={(e) => setAssignee(e.target.value)} data-testid="edit-task-assignee" />
+          </div>
+          <div>
+            <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Tipe</div>
+            <select className={inp} value={assigneeType} onChange={(e) => setAssigneeType(e.target.value)}>
+              <option value="tim">Tim Internal</option>
+              <option value="freelance">Freelance</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <div className="text-[0.65rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">Notes</div>
+          <textarea className={inp + " font-mono text-[0.8rem]"} rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Catatan tambahan..." data-testid="edit-task-notes" />
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-full border border-[var(--ms-border)] text-sm font-semibold">Batal</button>
+          <button onClick={save} disabled={saving} className="px-4 py-2 rounded-full text-white text-sm font-semibold" style={{ background: "var(--ms-primary)" }} data-testid="save-edit-task">{saving ? "..." : "Simpan"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

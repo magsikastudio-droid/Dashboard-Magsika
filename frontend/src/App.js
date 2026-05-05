@@ -16,7 +16,6 @@ import Invoice from "@/pages/Invoice";
 import Settings from "@/pages/Settings";
 import Earning from "@/pages/Earning";
 import Freelance from "@/pages/Freelance";
-import Archive from "@/pages/Archive";
 import Todo from "@/pages/Todo";
 import Performance from "@/pages/Performance";
 
@@ -48,7 +47,6 @@ function AppRouter() {
       <Route path="/invoice" element={gated(Invoice)} />
       <Route path="/earning" element={gated(Earning)} />
       <Route path="/freelance" element={gated(Freelance)} />
-      <Route path="/archive" element={gated(Archive)} />
       <Route path="/todo" element={gated(Todo, ALL)} />
       <Route path="/performance" element={gated(Performance, ALL)} />
       <Route path="/settings" element={gated(Settings, ADMIN_ONLY)} />

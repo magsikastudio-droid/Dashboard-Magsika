@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, FileDown, ClipboardList, Search, Trash2, Pencil, AlertTriangle, CheckSquare, Square, Receipt, Archive, Upload } from "lucide-react";
+import { Plus, FileDown, ClipboardList, Search, Trash2, Pencil, AlertTriangle, CheckSquare, Square, Receipt, Upload } from "lucide-react";
 import { useOrders } from "../context/OrdersContext";
 import { useCurrency } from "../context/CurrencyContext";
 import { JENIS_COLORS, statusColor, PLATFORM_COLORS, MARKETER_COLORS, PLATFORM_OPTIONS, MARKETER_OPTIONS, STATUS_OPTIONS, DONE_STATUSES } from "../lib/constants";
@@ -97,7 +97,6 @@ export default function Orders() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => navigate("/archive")} className="flex items-center gap-2 px-4 py-2.5 rounded-2xl border border-[var(--ms-border)] text-sm font-semibold hover:bg-[var(--ms-bg)] transition-base" data-testid="go-archive-btn"><Archive size={15} /> Arsip</button>
           <button onClick={() => setImportOpen(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-2xl border border-[var(--ms-border)] text-sm font-semibold hover:bg-[var(--ms-bg)] transition-base" data-testid="import-csv-btn"><Upload size={15} /> Import CSV</button>
           <button onClick={exportCSV} className="flex items-center gap-2 px-4 py-2.5 rounded-2xl border border-[var(--ms-border)] text-sm font-semibold hover:bg-[var(--ms-bg)] transition-base" data-testid="export-csv-btn"><FileDown size={15} /> Export CSV</button>
           <button onClick={() => { setEditing(null); setModalOpen(true); }} className="flex items-center gap-2 px-4 py-2.5 rounded-2xl text-white text-sm font-semibold transition-base hover:opacity-90" style={{ background: "var(--ms-primary)" }} data-testid="add-order-btn"><Plus size={15} /> Tambah Order</button>

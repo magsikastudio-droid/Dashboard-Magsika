@@ -15,8 +15,21 @@ export const fmtDate = (iso) => {
 export const isLate = (deadlineIso, status) => {
   if (!deadlineIso) return false;
   const s = (status || "").toLowerCase();
-  if (["done", "delivered", "cancel"].includes(s)) return false;
+  if (["done", "delivered", "cancel", "complete", "completed"].includes(s)) return false;
   return new Date(deadlineIso) < new Date(new Date().toDateString());
+};
+
+export const daysToDeadline = (deadlineIso) => {
+  if (!deadlineIso) return null;
+  const d = new Date(deadlineIso);
+  d.setHours(23, 59, 59, 0);
+  const now = new Date();
+  return Math.ceil((d - now) / (1000 * 60 * 60 * 24));
+};
+
+export const isDone = (status) => {
+  const s = (status || "").toLowerCase();
+  return ["done", "delivered", "cancel", "complete", "completed"].includes(s);
 };
 
 export const monthKey = (iso) => {
