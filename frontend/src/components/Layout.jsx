@@ -46,6 +46,7 @@ export default function Layout({ children }) {
 
   const navItems = NAV_BY_ROLE[user?.role] || NAV_BY_ROLE.talent;
   const isAdmin = user?.role === "admin";
+  const showGear = user?.role === "admin" || user?.role === "pm";
 
   const saveRate = () => { updateRate(parseFloat(rateInput) || 16000); setShowRate(false); };
 
@@ -75,18 +76,6 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="flex items-center gap-2">
-            {/* Currency toggle + rate (hidden for Talent since they don't see money) */}
-            {user?.role !== "talent" && (
-              <>
-                <div className="flex items-center bg-[var(--ms-bg)] p-0.5 rounded-full border border-[var(--ms-border)]" data-testid="currency-toggle">
-                  <button onClick={() => setDisplayCurrency("USD")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "USD" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-usd-btn">$ USD</button>
-                  <button onClick={() => setDisplayCurrency("IDR")} className={`px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "IDR" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-idr-btn">Rp IDR</button>
-                </div>
-                <button onClick={() => { setShowRate(!showRate); setRateInput(rate); }} className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--ms-bg)] border border-[var(--ms-border)] text-[0.68rem] font-mono font-semibold hover:bg-white transition-base" data-testid="rate-btn" title="Atur kurs">
-                  <RefreshCw size={11} /> 1$ = Rp{Math.round(rate).toLocaleString("id-ID")}
-                </button>
-              </>
-            )}
             {showRate && (
               <div className="absolute top-16 right-6 bg-white border border-[var(--ms-border)] rounded-2xl p-4 shadow-lg z-50 w-72" data-testid="rate-popup">
                 <div className="text-xs font-bold mb-2 uppercase tracking-wider font-mono" style={{ color: "var(--ms-primary)" }}>Kurs IDR / 1 USD</div>
@@ -108,7 +97,7 @@ export default function Layout({ children }) {
                   <span className="text-[0.7rem] font-semibold hidden md:inline">{user.name || user.email}</span>
                   <span className="text-[0.58rem] font-bold font-mono px-1.5 py-0 rounded-full text-white" style={{ background: ROLE_COLORS[user.role] }} data-testid="user-role-badge">{ROLE_LABELS[user.role]}</span>
                 </div>
-                {isAdmin && (
+                {showGear && (
                   <div className="relative">
                     <button onClick={() => setShowGearMenu((v) => !v)} className="p-2 rounded-full hover:bg-[var(--ms-bg)] text-[var(--ms-text-muted)] flex items-center gap-0.5" data-testid="gear-icon" title="Settings">
                       <SettingsIcon size={16} />
@@ -117,10 +106,19 @@ export default function Layout({ children }) {
                     {showGearMenu && (
                       <>
                         <div className="fixed inset-0 z-40" onClick={() => setShowGearMenu(false)} />
-                        <div className="absolute right-0 mt-2 w-56 bg-white border border-[var(--ms-border)] rounded-2xl shadow-lg overflow-hidden z-50" data-testid="gear-dropdown">
-                          <button onClick={() => { setShowGearMenu(false); navigate("/settings"); }} className="w-full text-left px-4 py-2.5 hover:bg-[var(--ms-bg)] text-sm font-medium flex items-center gap-2.5 border-b border-[var(--ms-border)]" data-testid="menu-general-settings">
-                            <SettingsIcon size={14} className="text-[var(--ms-text-muted)]" /> General Settings
-                          </button>
+                        <div className="absolute right-0 mt-2 w-64 bg-white border border-[var(--ms-border)] rounded-2xl shadow-lg overflow-hidden z-50" data-testid="gear-dropdown">
+                          {isAdmin && (
+                            <button onClick={() => { setShowGearMenu(false); navigate("/settings"); }} className="w-full text-left px-4 py-2.5 hover:bg-[var(--ms-bg)] text-sm font-medium flex items-center gap-2.5 border-b border-[var(--ms-border)]" data-testid="menu-general-settings">
+                              <SettingsIcon size={14} className="text-[var(--ms-text-muted)]" /> General Settings
+                            </button>
+                          )}
+                          <div className="px-4 py-2.5 border-b border-[var(--ms-border)]" data-testid="menu-currency-display">
+                            <div className="text-[0.62rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1.5">Tampilan Mata Uang</div>
+                            <div className="flex items-center bg-[var(--ms-bg)] p-0.5 rounded-full border border-[var(--ms-border)]" data-testid="currency-toggle">
+                              <button onClick={() => setDisplayCurrency("USD")} className={`flex-1 px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "USD" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-usd-btn">$ USD</button>
+                              <button onClick={() => setDisplayCurrency("IDR")} className={`flex-1 px-2.5 py-1 rounded-full text-xs font-bold transition-base ${display === "IDR" ? "bg-white shadow-sm" : "text-[var(--ms-text-muted)]"}`} data-testid="currency-idr-btn">Rp IDR</button>
+                            </div>
+                          </div>
                           <button onClick={() => { setShowGearMenu(false); setShowRate(true); setRateInput(rate); }} className="w-full text-left px-4 py-2.5 hover:bg-[var(--ms-bg)] text-sm font-medium flex items-center gap-2.5" data-testid="menu-currency-rate">
                             <RefreshCw size={14} className="text-[var(--ms-text-muted)]" />
                             <span className="flex-1">Kurs USD/IDR</span>
