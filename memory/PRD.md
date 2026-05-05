@@ -208,6 +208,40 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
 - 14/14 backend pytest pass (auth, folder-code unique, pause/resume, edit task persist, talent RBAC, telegram thread_id round-trip, performance)
 - Frontend Playwright: header decluttered ✓, gear dropdown ✓, IDR switch renders Rp ✓, dismiss banners ✓, rate-popup save→label updates ✓
 
+## Implemented (iter 11 — Daily Chat tracking, 2026-05-05) ✅
+
+### New page `/daily-chat` (Admin + PM only)
+- ✅ Position in nav: between Earning and Freelance (Talent does NOT see — has only To Do + Performance)
+- ✅ Header (title + Export CSV + Tambah client)
+- ✅ 5 realtime stat cards: Total Inbox / Discussing / Follow Up + Nego / Place Order / Conversion Rate
+- ✅ Filter bar: week navigation (◀ "Minggu N · Bulan YYYY" ▶), account pill (Semua / Magsika / Eirene), status dropdown (Semua + 6 statuses)
+- ✅ Real revenue total displayed at right end of filter bar
+- ✅ Editable inline table — date / type / username / estimasi / budget / agreed / real (all USD) / status (color-coded dropdown) / account (color-coded dropdown) / delete
+- ✅ Status colors: Discussing=ungu, Negotiating=kuning, Follow Up=oranye, Offer Sent=biru, Place Order=hijau, Lost=merah
+- ✅ Account colors: Magsika=hijau, Eirene=pink
+- ✅ "Tambah baris" full-width button below table
+- ✅ Collapsible "Ringkasan minggu sebelumnya" (default open) — auto-aggregated last 8 weeks. Conv. rate color: green >45%, yellow 30-45%, red <30%
+- ✅ CSV export of currently visible rows
+
+### Backend — MongoDB (project standard; user mentioned "Supabase" but kept consistent)
+- ✅ Collection `daily_chats` with `week_key=YYYY-MM-Wn` (Monday-anchored)
+- ✅ Endpoints: GET/POST/PATCH/DELETE /api/daily-chats (admin/pm gated)
+- ✅ GET /api/daily-chats/current-week
+- ✅ GET /api/daily-chats/summary?limit=8 — Mongo aggregation (group by week_key + account)
+- ✅ WebSocket broadcast on create/update/delete
+
+### Daily Chat Telegram (separate from deadline reminders)
+- ✅ Settings extended: `dc_telegram_bot_token`, `dc_telegram_chat_id`, `dc_telegram_thread_id` (Optional[int]), `dc_reminders_enabled`, `dc_template`
+- ✅ Background loop `daily_chat_reminder_loop` — runs every 5 min, sends at 09/12/15/18/21 WIB
+- ✅ Only sends when there are clients with status ∈ {Discussing, Negotiating, Follow Up} in current week
+- ✅ Groups by Magsika first, Eirene second; skips empty account headers; skips entire send if total=0
+- ✅ Editable template with vars: `{day}`, `{date}`, `{time}`, `{groups}`, `{total}`
+- ✅ Settings UI section "Daily Chat Telegram" with bot/chat/thread/template inputs
+
+### Testing — iteration_11.json
+- 14/14 backend pytest pass. 100% frontend critical flows (nav, route, stats, filters, CRUD via UI, CSV download, settings persist, talent RBAC redirect)
+- Talent confirmed: nav has only nav-todo + nav-performance, direct /daily-chat redirects to /todo
+
 ## Backlog (P1/P2)
 
 ### Tier 2 (next)
