@@ -135,6 +135,12 @@ class Settings(BaseModel):
     reminders_enabled: bool = True
     exchange_rate: float = 16000  # IDR per USD
     telegram_templates: dict = {}
+    # Daily Chat — separate Telegram config
+    dc_telegram_bot_token: str = ""
+    dc_telegram_chat_id: str = ""
+    dc_telegram_thread_id: Optional[int] = None
+    dc_reminders_enabled: bool = True
+    dc_template: str = ""
 
 class SettingsInput(BaseModel):
     allowed_emails: List[str] = []
@@ -144,10 +150,97 @@ class SettingsInput(BaseModel):
     reminders_enabled: bool = True
     exchange_rate: float = 16000
     telegram_templates: dict = {}
+    dc_telegram_bot_token: str = ""
+    dc_telegram_chat_id: str = ""
+    dc_telegram_thread_id: Optional[int] = None
+    dc_reminders_enabled: bool = True
+    dc_template: str = ""
 
 class ReassignInput(BaseModel):
     artists: Optional[List[str]] = None
     status: Optional[str] = None
+
+# ---------- Daily Chat ----------
+DC_STATUSES = ["Discussing", "Negotiating", "Follow Up", "Offer Sent", "Place Order", "Lost"]
+DC_TYPES = ["New Client", "Return Client", "Referral"]
+DC_ACCOUNTS = ["Magsika", "Eirene"]
+DC_FOLLOWUP_STATUSES = {"Discussing", "Negotiating", "Follow Up"}
+DC_CLOSING_STATUSES = {"Place Order"}
+
+DC_DEFAULT_TEMPLATE = """🔔 Reminder Daily Chat
+{day}, {date} · {time} WIB
+
+{groups}
+Total perlu ditindaklanjuti: {total} client"""
+
+def dc_week_key(date_iso: str) -> str:
+    """Compute week key YYYY-MM-Wn where n = which Monday-week within the month."""
+    try:
+        d = datetime.fromisoformat(date_iso).date()
+    except Exception:
+        d = datetime.now(timezone.utc).date()
+    monday = d - timedelta(days=d.weekday())
+    n = (monday.day - 1) // 7 + 1
+    return f"{monday.year}-{monday.month:02d}-W{n}"
+
+def dc_week_label(week_key: str) -> str:
+    """Return 'Minggu N · Mei 2026' label."""
+    BULAN = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+    try:
+        y, m, n = week_key.split("-")
+        n = int(n.replace("W", ""))
+        return f"Minggu {n} · {BULAN[int(m)]} {y}"
+    except Exception:
+        return week_key
+
+def dc_week_short(week_key: str) -> str:
+    BULAN_SHORT = ["", "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+    try:
+        y, m, n = week_key.split("-")
+        n = int(n.replace("W", ""))
+        return f"MG {n} · {BULAN_SHORT[int(m)]} {y}"
+    except Exception:
+        return week_key
+
+class DailyChat(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    date: str = ""           # YYYY-MM-DD
+    week_key: str = ""        # YYYY-MM-Wn (computed from date on save)
+    type: str = "New Client"
+    username: str = ""
+    est_budget: float = 0
+    client_budget: float = 0
+    agreed: float = 0
+    real: float = 0
+    status: str = "Discussing"
+    account: str = "Magsika"
+    notes: str = ""
+    created_at: str = ""
+
+class DailyChatInput(BaseModel):
+    date: Optional[str] = None
+    type: Optional[str] = "New Client"
+    username: Optional[str] = ""
+    est_budget: Optional[float] = 0
+    client_budget: Optional[float] = 0
+    agreed: Optional[float] = 0
+    real: Optional[float] = 0
+    status: Optional[str] = "Discussing"
+    account: Optional[str] = "Magsika"
+    notes: Optional[str] = ""
+
+class DailyChatPatch(BaseModel):
+    date: Optional[str] = None
+    type: Optional[str] = None
+    username: Optional[str] = None
+    est_budget: Optional[float] = None
+    client_budget: Optional[float] = None
+    agreed: Optional[float] = None
+    real: Optional[float] = None
+    status: Optional[str] = None
+    account: Optional[str] = None
+    notes: Optional[str] = None
 
 # ---------- Auth helpers ----------
 def hash_password(pw: str) -> str:
@@ -1342,8 +1435,187 @@ async def daily_task_generator_loop():
         await asyncio.sleep(3600)  # every hour
         await asyncio.sleep(600)
 
+# ---------- Daily Chat endpoints ----------
+@api_router.get("/daily-chats")
+async def list_daily_chats(week: Optional[str] = None, account: Optional[str] = None, status: Optional[str] = None, user: User = Depends(require_admin_or_pm)):
+    q: dict = {}
+    if week:
+        q["week_key"] = week
+    if account and account != "all":
+        q["account"] = account
+    if status and status != "all":
+        q["status"] = status
+    docs = await db.daily_chats.find(q, {"_id": 0}).sort([("date", 1), ("created_at", 1)]).to_list(2000)
+    return docs
+
+@api_router.post("/daily-chats")
+async def create_daily_chat(payload: DailyChatInput, user: User = Depends(require_admin_or_pm)):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date = payload.date or today
+    doc = DailyChat(
+        date=date,
+        week_key=dc_week_key(date),
+        type=payload.type or "New Client",
+        username=payload.username or "",
+        est_budget=float(payload.est_budget or 0),
+        client_budget=float(payload.client_budget or 0),
+        agreed=float(payload.agreed or 0),
+        real=float(payload.real or 0),
+        status=payload.status or "Discussing",
+        account=payload.account or "Magsika",
+        notes=payload.notes or "",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    ).model_dump()
+    await db.daily_chats.insert_one(doc.copy())
+    saved = await db.daily_chats.find_one({"id": doc["id"]}, {"_id": 0})
+    await manager.broadcast({"type": "daily_chat_created", "data": saved})
+    return saved
+
+@api_router.patch("/daily-chats/{cid}")
+async def patch_daily_chat(cid: str, payload: DailyChatPatch, user: User = Depends(require_admin_or_pm)):
+    existing = await db.daily_chats.find_one({"id": cid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Not found")
+    upd = {}
+    for field in ("type", "username", "status", "account", "notes"):
+        v = getattr(payload, field)
+        if v is not None:
+            upd[field] = v
+    for field in ("est_budget", "client_budget", "agreed", "real"):
+        v = getattr(payload, field)
+        if v is not None:
+            upd[field] = float(v)
+    if payload.date is not None:
+        upd["date"] = payload.date
+        upd["week_key"] = dc_week_key(payload.date)
+    if upd:
+        await db.daily_chats.update_one({"id": cid}, {"$set": upd})
+    saved = await db.daily_chats.find_one({"id": cid}, {"_id": 0})
+    await manager.broadcast({"type": "daily_chat_updated", "data": saved})
+    return saved
+
+@api_router.delete("/daily-chats/{cid}")
+async def delete_daily_chat(cid: str, user: User = Depends(require_admin_or_pm)):
+    await db.daily_chats.delete_one({"id": cid})
+    await manager.broadcast({"type": "daily_chat_deleted", "id": cid})
+    return {"ok": True}
+
+@api_router.get("/daily-chats/summary")
+async def daily_chat_summary(limit: int = 8, user: User = Depends(require_admin_or_pm)):
+    """Aggregated weekly summary, last `limit` weeks (per account)."""
+    pipeline = [
+        {"$group": {
+            "_id": {"week_key": "$week_key", "account": "$account"},
+            "inbox": {"$sum": 1},
+            "closing": {"$sum": {"$cond": [{"$eq": ["$status", "Place Order"]}, 1, 0]}},
+            "revenue_real": {"$sum": "$real"},
+        }},
+        {"$sort": {"_id.week_key": -1}},
+    ]
+    rows = await db.daily_chats.aggregate(pipeline).to_list(2000)
+    out = []
+    for r in rows:
+        wk = r["_id"]["week_key"]
+        inbox = r["inbox"]
+        closing = r["closing"]
+        out.append({
+            "week_key": wk,
+            "label": dc_week_short(wk),
+            "account": r["_id"]["account"],
+            "inbox": inbox,
+            "closing": closing,
+            "conversion_rate": round((closing / inbox) * 100, 1) if inbox else 0,
+            "revenue_real": float(r["revenue_real"] or 0),
+        })
+    # sort by week_key DESC (string sort works since YYYY-MM-Wn padded)
+    out.sort(key=lambda x: (x["week_key"], x["account"]), reverse=True)
+    return out[: limit * 2]  # 2 accounts max per week
+
+@api_router.get("/daily-chats/current-week")
+async def current_week_key(user: User = Depends(require_admin_or_pm)):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    wk = dc_week_key(today)
+    return {"week_key": wk, "label": dc_week_label(wk)}
+
+# ---------- Daily Chat Telegram reminder loop ----------
+DC_REMIND_HOURS_WIB = {9, 12, 15, 18, 21}
+
+async def daily_chat_reminder_loop():
+    """Send DC reminder at 09/12/15/18/21 WIB if there are active follow-ups."""
+    last_sent_hour: dict = {}  # date_str -> set of hours sent
+    while True:
+        try:
+            settings_doc = await get_settings_doc()
+            if not settings_doc.get("dc_reminders_enabled", True):
+                await asyncio.sleep(300); continue
+            token = settings_doc.get("dc_telegram_bot_token", "")
+            chat_id = settings_doc.get("dc_telegram_chat_id", "")
+            thread_id = settings_doc.get("dc_telegram_thread_id")
+            if not token or not chat_id:
+                await asyncio.sleep(300); continue
+
+            # WIB = UTC+7
+            now_wib = datetime.now(timezone.utc) + timedelta(hours=7)
+            hour = now_wib.hour
+            date_str = now_wib.strftime("%Y-%m-%d")
+            if hour not in DC_REMIND_HOURS_WIB:
+                await asyncio.sleep(300); continue
+            sent_set = last_sent_hour.get(date_str, set())
+            if hour in sent_set:
+                await asyncio.sleep(300); continue
+
+            # Fetch active follow-ups in current week
+            wk = dc_week_key(date_str)
+            chats = await db.daily_chats.find({"week_key": wk, "status": {"$in": list(DC_FOLLOWUP_STATUSES)}}, {"_id": 0}).to_list(500)
+            if not chats:
+                # Don't send anything per spec, but mark sent for this hour to avoid spam
+                sent_set.add(hour); last_sent_hour[date_str] = sent_set
+                await asyncio.sleep(300); continue
+
+            by_account = {"Magsika": [], "Eirene": []}
+            for c in chats:
+                acct = c.get("account") or "Magsika"
+                if acct in by_account:
+                    by_account[acct].append(c)
+            groups_lines = []
+            total = 0
+            for acct in ["Magsika", "Eirene"]:
+                arr = by_account.get(acct) or []
+                if not arr:
+                    continue
+                groups_lines.append(f"━ {acct} ({len(arr)})")
+                for c in arr:
+                    groups_lines.append(f"  • {c.get('username') or '(no username)'} — {c.get('status')}")
+                groups_lines.append("")
+                total += len(arr)
+            groups_text = "\n".join(groups_lines).strip()
+            day_names = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+            tmpl = settings_doc.get("dc_template") or DC_DEFAULT_TEMPLATE
+            try:
+                msg = tmpl.format(
+                    day=day_names[now_wib.weekday()],
+                    date=now_wib.strftime("%d/%m/%Y"),
+                    time=now_wib.strftime("%H:%M"),
+                    groups=groups_text,
+                    total=total,
+                )
+            except Exception:
+                msg = DC_DEFAULT_TEMPLATE.format(
+                    day=day_names[now_wib.weekday()],
+                    date=now_wib.strftime("%d/%m/%Y"),
+                    time=now_wib.strftime("%H:%M"),
+                    groups=groups_text,
+                    total=total,
+                )
+            ok = send_telegram(token, chat_id, msg, thread_id)
+            if ok:
+                sent_set.add(hour); last_sent_hour[date_str] = sent_set
+                logger.info(f"DC reminder sent at {hour}:00 WIB ({total} clients)")
+        except Exception as e:
+            logger.exception(f"daily_chat_reminder_loop error: {e}")
+        await asyncio.sleep(300)  # check every 5 minutes
+
 # ---------- WebSocket ----------
-@app.websocket("/api/ws")
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
@@ -1401,11 +1673,13 @@ async def on_startup():
     try:
         await db.users.create_index("email", unique=True)
         await db.tasks.create_index([("date", 1), ("order_id", 1), ("assignee", 1)])
+        await db.daily_chats.create_index([("week_key", 1), ("account", 1)])
     except Exception as e:
         logger.warning(f"index create warn: {e}")
     asyncio.create_task(reminder_loop())
     asyncio.create_task(daily_task_generator_loop())
-    logger.info("Reminder & daily-task loops started")
+    asyncio.create_task(daily_chat_reminder_loop())
+    logger.info("Reminder, daily-task, and daily-chat loops started")
 
 app.include_router(api_router)
 

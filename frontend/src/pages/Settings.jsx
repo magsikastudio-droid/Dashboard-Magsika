@@ -15,7 +15,7 @@ const TG_LABELS = { new: "🆕 Order Baru", reminder: "⏰ Reminder <5 & <3 Hari
 
 export default function Settings() {
   const { user } = useAuth();
-  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", telegram_thread_id: "", reminders_enabled: true, telegram_templates: {} });
+  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", telegram_thread_id: "", reminders_enabled: true, telegram_templates: {}, dc_telegram_bot_token: "", dc_telegram_chat_id: "", dc_telegram_thread_id: "", dc_reminders_enabled: true, dc_template: "" });
   const [users, setUsers] = useState([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -38,7 +38,11 @@ export default function Settings() {
   const save = async () => {
     setSaving(true);
     try {
-      const payload = { ...settings, telegram_thread_id: settings.telegram_thread_id === "" || settings.telegram_thread_id === null ? null : Number(settings.telegram_thread_id) };
+      const payload = {
+        ...settings,
+        telegram_thread_id: settings.telegram_thread_id === "" || settings.telegram_thread_id === null ? null : Number(settings.telegram_thread_id),
+        dc_telegram_thread_id: settings.dc_telegram_thread_id === "" || settings.dc_telegram_thread_id === null ? null : Number(settings.dc_telegram_thread_id),
+      };
       const res = await api.put("/settings", payload);
       setSettings({ ...res.data, allowed_emails: res.data.allowed_emails || [] });
       toast.success("Settings tersimpan");
@@ -175,6 +179,46 @@ export default function Settings() {
               </div>
             );
           })}
+        </div>
+      </section>
+
+      {/* Daily Chat Telegram config */}
+      <section className="bg-white rounded-2xl border border-[var(--ms-border)] p-6" data-testid="dc-telegram-section">
+        <div className="flex items-center gap-2.5 mb-1"><MessageSquare size={16} style={{ color: "var(--ms-primary)" }} /><h2 className="font-display text-xl font-bold">Daily Chat Telegram</h2></div>
+        <p className="text-sm text-[var(--ms-text-muted)] mb-5">Reminder otomatis Daily Chat di <strong>09.00, 12.00, 15.00, 18.00, 21.00 WIB</strong> jika ada client status Follow Up / Discussing / Negotiating. Konfigurasi terpisah dari Telegram Reminder Deadline.</p>
+        <div className="space-y-4">
+          <div>
+            <label className={lbl}>Bot Token</label>
+            <input className={inp} placeholder="123:AAA..." value={settings.dc_telegram_bot_token} onChange={(e) => setSettings({ ...settings, dc_telegram_bot_token: e.target.value })} data-testid="dc-token-input" />
+          </div>
+          <div>
+            <label className={lbl}>Chat ID</label>
+            <input className={inp} placeholder="-1001234567890" value={settings.dc_telegram_chat_id} onChange={(e) => setSettings({ ...settings, dc_telegram_chat_id: e.target.value })} data-testid="dc-chatid-input" />
+          </div>
+          <div>
+            <label className={lbl}>Topic / Thread ID <span className="text-[var(--ms-text-muted)] font-normal normal-case">(opsional)</span></label>
+            <input className={inp} type="number" placeholder="4689" value={settings.dc_telegram_thread_id ?? ""} onChange={(e) => setSettings({ ...settings, dc_telegram_thread_id: e.target.value === "" ? "" : Number(e.target.value) })} data-testid="dc-threadid-input" />
+            <p className="text-xs text-[var(--ms-text-muted)] mt-1.5">Kosongkan untuk kirim ke <strong>General</strong>.</p>
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-[var(--ms-bg)] border border-[var(--ms-border)]">
+            <input type="checkbox" checked={settings.dc_reminders_enabled} onChange={(e) => setSettings({ ...settings, dc_reminders_enabled: e.target.checked })} className="w-4 h-4 accent-[var(--ms-primary)]" data-testid="dc-reminders-enabled-toggle" />
+            <span className="text-sm font-medium">Aktifkan reminder Daily Chat otomatis</span>
+          </label>
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className={lbl + " mb-0"}>Template Pesan Reminder Daily Chat</label>
+              <button onClick={() => setSettings({ ...settings, dc_template: "" })} className="flex items-center gap-1 text-[0.68rem] font-semibold hover:underline" style={{ color: "var(--ms-primary)" }} data-testid="dc-template-reset"><RotateCcw size={10} /> Reset default</button>
+            </div>
+            <textarea
+              className={inp + " font-mono text-[0.8rem] leading-relaxed"}
+              rows={8}
+              value={settings.dc_template ?? ""}
+              onChange={(e) => setSettings({ ...settings, dc_template: e.target.value })}
+              placeholder={"🔔 Reminder Daily Chat\n{day}, {date} · {time} WIB\n\n{groups}\nTotal perlu ditindaklanjuti: {total} client"}
+              data-testid="dc-template-input"
+            />
+            <p className="text-xs text-[var(--ms-text-muted)] mt-1.5">Variabel: <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{day}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{date}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{time}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{groups}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{total}"}</code>. Kosongkan untuk pakai default.</p>
+          </div>
         </div>
       </section>
 

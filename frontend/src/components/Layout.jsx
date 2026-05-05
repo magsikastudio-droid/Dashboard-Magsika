@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, WifiOff, Dice5, Settings as SettingsIcon, TrendingUp, Palette, RefreshCw, CheckSquare, Award, ChevronDown } from "lucide-react";
+import { LayoutDashboard, ClipboardList, KanbanSquare, Receipt, LogOut, WifiOff, Dice5, Settings as SettingsIcon, TrendingUp, Palette, RefreshCw, CheckSquare, Award, ChevronDown, MessageCircle } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useOrders } from "../context/OrdersContext";
 import { useCurrency } from "../context/CurrencyContext";
@@ -17,6 +17,7 @@ const NAV_BY_ROLE = {
     { to: "/performance", label: "Performance", icon: Award, testid: "nav-performance" },
     { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
     { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
+    { to: "/daily-chat", label: "Daily Chat", icon: MessageCircle, testid: "nav-daily-chat" },
     { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
   ],
   pm: [
@@ -27,6 +28,7 @@ const NAV_BY_ROLE = {
     { to: "/performance", label: "Performance", icon: Award, testid: "nav-performance" },
     { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
     { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
+    { to: "/daily-chat", label: "Daily Chat", icon: MessageCircle, testid: "nav-daily-chat" },
     { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
   ],
   talent: [

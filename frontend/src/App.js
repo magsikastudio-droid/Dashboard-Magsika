@@ -15,6 +15,7 @@ import Board from "@/pages/Board";
 import Invoice from "@/pages/Invoice";
 import Settings from "@/pages/Settings";
 import Earning from "@/pages/Earning";
+import DailyChat from "@/pages/DailyChat";
 import Freelance from "@/pages/Freelance";
 import Todo from "@/pages/Todo";
 import Performance from "@/pages/Performance";
@@ -46,6 +47,7 @@ function AppRouter() {
       <Route path="/board" element={gated(Board)} />
       <Route path="/invoice" element={gated(Invoice)} />
       <Route path="/earning" element={gated(Earning)} />
+      <Route path="/daily-chat" element={gated(DailyChat)} />
       <Route path="/freelance" element={gated(Freelance)} />
       <Route path="/todo" element={gated(Todo, ALL)} />
       <Route path="/performance" element={gated(Performance, ALL)} />
