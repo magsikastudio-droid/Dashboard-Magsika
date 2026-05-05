@@ -176,6 +176,38 @@ Saya punya website magsikastudio.com dan saya ingin membuat administrasi pencata
   - ⏳ REMINDER DEADLINE — sisa N hari (manual ping)
 - ✅ Tested 12/12 pytest + Playwright frontend coverage 100% iter4 flows.
 
+## Implemented (iter 10 — UI/UX refinements + Telegram thread_id, 2026-05-05) ✅
+
+### Header & Settings
+- ✅ Currency toggle (USD/IDR) + Kurs editor MOVED into gear-icon dropdown
+- ✅ Header now only shows: brand · nav · live indicator · user badge · gear · logout
+- ✅ Gear dropdown visible for Admin AND PM (talent has no money UI). General Settings link admin-only.
+- ✅ Dropdown items: General Settings (admin) | Tampilan Mata Uang USD/IDR pill toggle | Kurs USD/IDR (opens rate popup)
+
+### Dashboard
+- ✅ Late-deadline banner (rose) + Approaching ≤3 days banner (amber) are dismissible via X icon
+- ✅ Per-mount useState (re-shows on full reload/login by design)
+
+### To Do
+- ✅ Talent CAN update status & notes on ANY task (not only own)
+- ✅ Admin-only Edit Task modal (title, assignee, assignee_type, notes) wired to PATCH /api/tasks/{id}
+- ✅ Pause/resume preserves elapsed_seconds — pending state stops timer but keeps accumulated time
+- ✅ TaskRow shows live elapsed (running task adds Date.now()-started_at)
+- ✅ Notes field rendered on each task row when present
+- ✅ Backend PATCH talent guard: status+notes allowed on any; title/assignee/type → 403
+
+### Backend
+- ✅ Folder Code uniqueness on POST/PUT /api/orders (returns 409 Conflict)
+- ✅ Telegram thread_id (settings.telegram_thread_id) included in sendMessage payload
+- ✅ Hourly background loop auto-fails past-date tasks not yet done
+
+### Removed
+- ✅ Archive page deleted from frontend nav (and route)
+
+### Testing — iteration_10.json
+- 14/14 backend pytest pass (auth, folder-code unique, pause/resume, edit task persist, talent RBAC, telegram thread_id round-trip, performance)
+- Frontend Playwright: header decluttered ✓, gear dropdown ✓, IDR switch renders Rp ✓, dismiss banners ✓, rate-popup save→label updates ✓
+
 ## Backlog (P1/P2)
 
 ### Tier 2 (next)
