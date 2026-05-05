@@ -15,7 +15,7 @@ const TG_LABELS = { new: "🆕 Order Baru", reminder: "⏰ Reminder <5 & <3 Hari
 
 export default function Settings() {
   const { user } = useAuth();
-  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", reminders_enabled: true, telegram_templates: {} });
+  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", telegram_thread_id: "", reminders_enabled: true, telegram_templates: {} });
   const [users, setUsers] = useState([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -38,7 +38,8 @@ export default function Settings() {
   const save = async () => {
     setSaving(true);
     try {
-      const res = await api.put("/settings", settings);
+      const payload = { ...settings, telegram_thread_id: settings.telegram_thread_id === "" || settings.telegram_thread_id === null ? null : Number(settings.telegram_thread_id) };
+      const res = await api.put("/settings", payload);
       setSettings({ ...res.data, allowed_emails: res.data.allowed_emails || [] });
       toast.success("Settings tersimpan");
     } catch (e) { toast.error("Gagal simpan: " + (e?.response?.data?.detail || e.message)); }
@@ -130,6 +131,11 @@ export default function Settings() {
             <label className={lbl}>Chat ID</label>
             <input className={inp} placeholder="1415837440" value={settings.telegram_chat_id} onChange={(e) => setSettings({ ...settings, telegram_chat_id: e.target.value })} data-testid="telegram-chatid-input" />
             <p className="text-xs text-[var(--ms-text-muted)] mt-1.5">ID chat personal/grup yang akan terima reminder.</p>
+          </div>
+          <div>
+            <label className={lbl}>Topic / Thread ID <span className="text-[var(--ms-text-muted)] font-normal normal-case">(opsional)</span></label>
+            <input className={inp} type="number" placeholder="4689" value={settings.telegram_thread_id ?? ""} onChange={(e) => setSettings({ ...settings, telegram_thread_id: e.target.value === "" ? "" : Number(e.target.value) })} data-testid="telegram-threadid-input" />
+            <p className="text-xs text-[var(--ms-text-muted)] mt-1.5"><code className="font-mono">message_thread_id</code> untuk mengarahkan pesan ke topic tertentu di grup forum. Kosongkan untuk kirim ke <strong>General</strong>.</p>
           </div>
           <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-[var(--ms-bg)] border border-[var(--ms-border)]">
             <input type="checkbox" checked={settings.reminders_enabled} onChange={(e) => setSettings({ ...settings, reminders_enabled: e.target.checked })} className="w-4 h-4 accent-[var(--ms-primary)]" data-testid="reminders-enabled-toggle" />
