@@ -15,7 +15,7 @@ const TG_LABELS = { new: "🆕 Order Baru", reminder: "⏰ Reminder <5 & <3 Hari
 
 export default function Settings() {
   const { user } = useAuth();
-  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", telegram_thread_id: "", reminders_enabled: true, telegram_templates: {}, dc_telegram_bot_token: "", dc_telegram_chat_id: "", dc_telegram_thread_id: "", dc_reminders_enabled: true, dc_template: "" });
+  const [settings, setSettings] = useState({ allowed_emails: [], telegram_bot_token: "", telegram_chat_id: "", telegram_thread_id: "", reminders_enabled: true, telegram_templates: {}, dc_telegram_bot_token: "", dc_telegram_chat_id: "", dc_telegram_thread_id: "", dc_reminders_enabled: true, dc_template: "", dc_reminder_hours: [9, 12, 15, 18, 21] });
   const [users, setUsers] = useState([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -38,10 +38,18 @@ export default function Settings() {
   const save = async () => {
     setSaving(true);
     try {
+      const normalizeHours = (v) => {
+        if (Array.isArray(v)) return v.filter((n) => Number.isFinite(Number(n))).map(Number);
+        if (typeof v === "string") {
+          return v.split(",").map((x) => parseInt(x.trim(), 10)).filter((n) => Number.isFinite(n) && n >= 0 && n <= 23);
+        }
+        return [9, 12, 15, 18, 21];
+      };
       const payload = {
         ...settings,
         telegram_thread_id: settings.telegram_thread_id === "" || settings.telegram_thread_id === null ? null : Number(settings.telegram_thread_id),
         dc_telegram_thread_id: settings.dc_telegram_thread_id === "" || settings.dc_telegram_thread_id === null ? null : Number(settings.dc_telegram_thread_id),
+        dc_reminder_hours: normalizeHours(settings.dc_reminder_hours),
       };
       const res = await api.put("/settings", payload);
       setSettings({ ...res.data, allowed_emails: res.data.allowed_emails || [] });
@@ -55,6 +63,14 @@ export default function Settings() {
     try { await api.post("/settings/test-telegram"); toast.success("Pesan test terkirim! Cek Telegram."); }
     catch (e) { toast.error("Gagal: " + (e?.response?.data?.detail || e.message)); }
     finally { setTesting(false); }
+  };
+
+  const [testingDc, setTestingDc] = useState(false);
+  const testDcTelegram = async () => {
+    setTestingDc(true);
+    try { await api.post("/settings/test-dc-telegram"); toast.success("Pesan test Daily Chat terkirim! Cek Telegram."); }
+    catch (e) { toast.error("Gagal: " + (e?.response?.data?.detail || e.message)); }
+    finally { setTestingDc(false); }
   };
 
   const addEmail = () => {
@@ -185,7 +201,7 @@ export default function Settings() {
       {/* Daily Chat Telegram config */}
       <section className="bg-white rounded-2xl border border-[var(--ms-border)] p-6" data-testid="dc-telegram-section">
         <div className="flex items-center gap-2.5 mb-1"><MessageSquare size={16} style={{ color: "var(--ms-primary)" }} /><h2 className="font-display text-xl font-bold">Daily Chat Telegram</h2></div>
-        <p className="text-sm text-[var(--ms-text-muted)] mb-5">Reminder otomatis Daily Chat di <strong>09.00, 12.00, 15.00, 18.00, 21.00 WIB</strong> jika ada client status Follow Up / Discussing / Negotiating. Konfigurasi terpisah dari Telegram Reminder Deadline.</p>
+        <p className="text-sm text-[var(--ms-text-muted)] mb-5">Reminder otomatis Daily Chat di jam-jam yang kamu set di bawah (WIB) jika ada client status Follow Up / Discussing / Negotiating. Konfigurasi terpisah dari Telegram Reminder Deadline.</p>
         <div className="space-y-4">
           <div>
             <label className={lbl}>Bot Token</label>
@@ -205,6 +221,24 @@ export default function Settings() {
             <span className="text-sm font-medium">Aktifkan reminder Daily Chat otomatis</span>
           </label>
           <div>
+            <label className={lbl}>Jam Reminder (WIB)</label>
+            <input className={inp + " font-mono"} placeholder="9, 12, 15, 18, 21"
+              value={Array.isArray(settings.dc_reminder_hours) ? settings.dc_reminder_hours.join(", ") : (settings.dc_reminder_hours || "")}
+              onChange={(e) => {
+                const raw = e.target.value;
+                // allow free typing; parse on blur
+                setSettings({ ...settings, dc_reminder_hours: raw });
+              }}
+              onBlur={(e) => {
+                const parsed = e.target.value.split(",").map((x) => parseInt(x.trim(), 10)).filter((n) => Number.isFinite(n) && n >= 0 && n <= 23);
+                const uniq = Array.from(new Set(parsed)).sort((a, b) => a - b);
+                setSettings({ ...settings, dc_reminder_hours: uniq });
+              }}
+              data-testid="dc-reminder-hours-input"
+            />
+            <p className="text-xs text-[var(--ms-text-muted)] mt-1.5">Pisahkan dengan koma. Format jam 24h (0-23). Contoh: <code className="font-mono">9, 12, 15, 18, 21</code>. Kosongkan = tidak ada reminder otomatis.</p>
+          </div>
+          <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className={lbl + " mb-0"}>Template Pesan Reminder Daily Chat</label>
               <button onClick={() => setSettings({ ...settings, dc_template: "" })} className="flex items-center gap-1 text-[0.68rem] font-semibold hover:underline" style={{ color: "var(--ms-primary)" }} data-testid="dc-template-reset"><RotateCcw size={10} /> Reset default</button>
@@ -219,6 +253,9 @@ export default function Settings() {
             />
             <p className="text-xs text-[var(--ms-text-muted)] mt-1.5">Variabel: <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{day}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{date}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{time}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{groups}"}</code> <code className="px-1.5 py-0.5 rounded bg-[var(--ms-bg)] text-[0.72rem] font-mono">{"{total}"}</code>. Kosongkan untuk pakai default.</p>
           </div>
+          <button onClick={testDcTelegram} disabled={testingDc || !settings.dc_telegram_bot_token || !settings.dc_telegram_chat_id} className="flex items-center gap-2 px-4 py-2 rounded-full border border-[var(--ms-border)] text-sm font-semibold hover:bg-[var(--ms-bg)] disabled:opacity-50 transition-base" data-testid="test-dc-telegram-btn">
+            <TestTube size={14} /> {testingDc ? "Mengirim..." : "Kirim Pesan Test Daily Chat"}
+          </button>
         </div>
       </section>
 

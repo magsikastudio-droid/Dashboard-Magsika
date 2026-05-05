@@ -94,6 +94,35 @@ export default function DailyChat() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Month list (current month + months that have history)
+  const monthOptions = useMemo(() => {
+    const set = new Set();
+    if (week) set.add(week.slice(0, 7));
+    summary.forEach((r) => set.add(r.week_key.slice(0, 7)));
+    // Add current month
+    const today = todayStr();
+    set.add(today.slice(0, 7));
+    return Array.from(set).sort().reverse();
+  }, [summary, week]);
+
+  const currentMonth = week ? week.slice(0, 7) : "";
+
+  // Weeks within selected month: derived from existing data + at least W1-W4 always shown
+  const weeksInMonth = useMemo(() => {
+    if (!currentMonth) return [];
+    // Always offer W1..W5; check if month actually has W5 (some months do)
+    const [y, m] = currentMonth.split("-").map(Number);
+    // Determine max W number — months can have up to 5 Mondays in their month-week numbering
+    const lastDay = new Date(y, m, 0).getDate();
+    const maxW = Math.floor((lastDay - 1) / 7) + 1;
+    return Array.from({ length: Math.min(maxW, 5) }, (_, i) => `${currentMonth}-W${i + 1}`);
+  }, [currentMonth]);
+
+  const onMonthChange = (newMonth) => {
+    if (!newMonth) return;
+    setWeek(`${newMonth}-W1`);
+  };
+
   // Apply client-side filters for visible
   const visible = useMemo(() => chats.filter((c) => {
     if (accountFilter !== "all" && c.account !== accountFilter) return false;
@@ -101,23 +130,42 @@ export default function DailyChat() {
     return true;
   }), [chats, accountFilter, statusFilter]);
 
+  // Stats based on ALL chats of week (not filtered) — so cards stay independent of status filter
   const stats = useMemo(() => {
-    const total = visible.length;
-    const discussing = visible.filter((c) => c.status === "Discussing").length;
-    const followNego = visible.filter((c) => c.status === "Follow Up" || c.status === "Negotiating").length;
-    const place = visible.filter((c) => c.status === "Place Order").length;
+    const baseChats = chats.filter((c) => accountFilter === "all" || c.account === accountFilter);
+    const total = baseChats.length;
+    const discussing = baseChats.filter((c) => c.status === "Discussing").length;
+    const followNego = baseChats.filter((c) => c.status === "Follow Up" || c.status === "Negotiating").length;
+    const place = baseChats.filter((c) => c.status === "Place Order").length;
     const realRev = visible.reduce((s, c) => s + (Number(c.real) || 0), 0);
     const conv = total ? Math.round((place / total) * 100) : 0;
     return { total, discussing, followNego, place, realRev, conv };
-  }, [visible]);
+  }, [chats, accountFilter, visible]);
+
+  const toggleStatusFilter = (target) => {
+    // target may be "Discussing", "Place Order", or "follow_nego" (special: applies multi-filter)
+    if (target === "follow_nego") {
+      // map to a virtual filter — easiest: cycle Follow Up only (most common)
+      setStatusFilter((cur) => cur === "Follow Up" ? "all" : "Follow Up");
+      return;
+    }
+    setStatusFilter((cur) => cur === target ? "all" : target);
+  };
 
   // Optimistic update helper
   const updateLocal = (id, patch) => setChats((prev) => prev.map((c) => c.id === id ? { ...c, ...patch } : c));
 
   const patchChat = async (id, patch) => {
-    updateLocal(id, patch);
+    // Auto-fill real = agreed * 0.8 (Magsika & Eirene = 20% platform fee)
+    let finalPatch = { ...patch };
+    if (Object.prototype.hasOwnProperty.call(patch, "agreed")) {
+      const agreedVal = Number(patch.agreed) || 0;
+      const computedReal = Math.round(agreedVal * 0.8 * 100) / 100;
+      finalPatch.real = computedReal;
+    }
+    updateLocal(id, finalPatch);
     try {
-      const r = await api.patch(`/daily-chats/${id}`, patch);
+      const r = await api.patch(`/daily-chats/${id}`, finalPatch);
       setChats((prev) => prev.map((c) => c.id === id ? r.data : c));
     } catch (e) {
       toast.error("Gagal simpan: " + (e.response?.data?.detail || e.message));
@@ -172,21 +220,39 @@ export default function DailyChat() {
         </div>
       </div>
 
-      {/* Stat cards */}
+      {/* Stat cards (clickable to filter) */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <StatCard label="Total Inbox" value={stats.total} sub="minggu ini" color="#6d4cff" testid="stat-total" />
-        <StatCard label="Discussing" value={stats.discussing} sub="aktif" color="#7c3aed" testid="stat-discussing" />
-        <StatCard label="Follow Up / Nego" value={stats.followNego} sub="perlu tindak lanjut" color="#ea580c" testid="stat-followup" />
-        <StatCard label="Place Order" value={stats.place} sub="closing minggu ini" color="#16a34a" testid="stat-place" />
+        <StatCard label="Discussing" value={stats.discussing} sub="aktif" color="#7c3aed" testid="stat-discussing" active={statusFilter === "Discussing"} onClick={() => toggleStatusFilter("Discussing")} />
+        <StatCard label="Follow Up / Nego" value={stats.followNego} sub="perlu tindak lanjut" color="#ea580c" testid="stat-followup" active={statusFilter === "Follow Up"} onClick={() => toggleStatusFilter("follow_nego")} />
+        <StatCard label="Place Order" value={stats.place} sub="closing minggu ini" color="#16a34a" testid="stat-place" active={statusFilter === "Place Order"} onClick={() => toggleStatusFilter("Place Order")} />
         <StatCard label="Conversion Rate" value={`${stats.conv}%`} sub="closing / total" color="#6d4cff" testid="stat-conv" />
       </div>
 
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3 bg-white rounded-2xl border border-[var(--ms-border)] p-3">
+        <select value={currentMonth} onChange={(e) => onMonthChange(e.target.value)} className="px-3 py-2 rounded-full border border-[var(--ms-border)] bg-white text-sm font-semibold focus:outline-none focus:border-[var(--ms-primary)]" data-testid="dc-month-filter">
+          {monthOptions.map((m) => {
+            const [y, mo] = m.split("-");
+            return <option key={m} value={m}>{BULAN[parseInt(mo, 10)]} {y}</option>;
+          })}
+        </select>
+
         <div className="flex items-center gap-1.5">
           <button onClick={() => setWeek(shiftWeekKey(week, -1))} className="p-2 rounded-full border border-[var(--ms-border)] hover:bg-[var(--ms-bg)]" data-testid="week-prev"><ChevronLeft size={14} /></button>
           <div className="px-4 py-2 rounded-full bg-[var(--ms-bg)] border border-[var(--ms-border)] text-sm font-semibold min-w-[180px] text-center" data-testid="week-label">{weekLabel(week)}</div>
           <button onClick={() => setWeek(shiftWeekKey(week, 1))} className="p-2 rounded-full border border-[var(--ms-border)] hover:bg-[var(--ms-bg)]" data-testid="week-next"><ChevronRight size={14} /></button>
+        </div>
+
+        <div className="flex items-center gap-1" data-testid="week-chips">
+          {weeksInMonth.map((wk) => (
+            <button key={wk} onClick={() => setWeek(wk)}
+              className={`px-2.5 py-1 rounded-full text-[0.7rem] font-mono font-bold transition-base ${week === wk ? "text-white" : "bg-[var(--ms-bg)] text-[var(--ms-text-muted)] hover:bg-white border border-[var(--ms-border)]"}`}
+              style={week === wk ? { background: "var(--ms-primary)" } : {}}
+              data-testid={`week-chip-${wk}`}>
+              W{wk.split("-W")[1]}
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center bg-[var(--ms-bg)] p-0.5 rounded-full border border-[var(--ms-border)]" data-testid="account-pill">
@@ -271,13 +337,22 @@ export default function DailyChat() {
   );
 }
 
-const StatCard = ({ label, value, sub, color, testid }) => (
-  <div className="bg-white rounded-2xl border border-[var(--ms-border)] p-4" data-testid={testid}>
-    <div className="text-[0.62rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">{label}</div>
-    <div className="font-display text-2xl font-extrabold" style={{ color }}>{value}</div>
-    <div className="text-[0.65rem] text-[var(--ms-text-muted)] mt-0.5">{sub}</div>
-  </div>
-);
+const StatCard = ({ label, value, sub, color, testid, active, onClick }) => {
+  const clickable = !!onClick;
+  const Comp = clickable ? "button" : "div";
+  return (
+    <Comp
+      onClick={onClick}
+      className={`text-left bg-white rounded-2xl border p-4 transition-base ${clickable ? "cursor-pointer hover:shadow-md hover:border-[var(--ms-primary)]" : ""} ${active ? "ring-2" : "border-[var(--ms-border)]"}`}
+      style={active ? { borderColor: color, boxShadow: `0 0 0 2px ${color}33` } : {}}
+      data-testid={testid}
+    >
+      <div className="text-[0.62rem] uppercase tracking-wider font-bold font-mono text-[var(--ms-text-muted)] mb-1">{label}</div>
+      <div className="font-display text-2xl font-extrabold" style={{ color }}>{value}</div>
+      <div className="text-[0.65rem] text-[var(--ms-text-muted)] mt-0.5">{sub}{active ? " · ✓ filter aktif" : ""}</div>
+    </Comp>
+  );
+};
 
 const PillBtn = ({ active, onClick, label, color, testid }) => (
   <button onClick={onClick} data-testid={testid}

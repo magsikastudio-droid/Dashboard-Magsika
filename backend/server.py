@@ -141,6 +141,7 @@ class Settings(BaseModel):
     dc_telegram_thread_id: Optional[int] = None
     dc_reminders_enabled: bool = True
     dc_template: str = ""
+    dc_reminder_hours: List[int] = [9, 12, 15, 18, 21]
 
 class SettingsInput(BaseModel):
     allowed_emails: List[str] = []
@@ -155,6 +156,7 @@ class SettingsInput(BaseModel):
     dc_telegram_thread_id: Optional[int] = None
     dc_reminders_enabled: bool = True
     dc_template: str = ""
+    dc_reminder_hours: List[int] = [9, 12, 15, 18, 21]
 
 class ReassignInput(BaseModel):
     artists: Optional[List[str]] = None
@@ -1314,6 +1316,29 @@ async def test_telegram(user: User = Depends(require_admin)):
         raise HTTPException(400, "Gagal kirim pesan test")
     return {"ok": True}
 
+@api_router.post("/settings/test-dc-telegram")
+async def test_dc_telegram(user: User = Depends(require_admin)):
+    """Send a sample Daily Chat reminder using current settings + actual chat data (or sample if empty)."""
+    s = await get_settings_doc()
+    token = s.get("dc_telegram_bot_token", "")
+    chat_id = s.get("dc_telegram_chat_id", "")
+    if not token or not chat_id:
+        raise HTTPException(400, "Daily Chat Telegram belum dikonfigurasi")
+    now_wib = datetime.now(timezone.utc) + timedelta(hours=7)
+    wk = dc_week_key(now_wib.strftime("%Y-%m-%d"))
+    chats = await db.daily_chats.find({"week_key": wk, "status": {"$in": list(DC_FOLLOWUP_STATUSES)}}, {"_id": 0}).to_list(500)
+    if not chats:
+        # fallback sample so user can preview format
+        chats = [
+            {"username": "sample_user1", "status": "Follow Up", "account": "Magsika"},
+            {"username": "sample_user2", "status": "Discussing", "account": "Eirene"},
+        ]
+    msg = "🧪 [TEST] " + build_dc_reminder_message(s, chats, now_wib)
+    ok = send_telegram(token, chat_id, msg, s.get("dc_telegram_thread_id"))
+    if not ok:
+        raise HTTPException(400, "Gagal kirim pesan test")
+    return {"ok": True}
+
 @api_router.get("/users")
 async def list_users(user: User = Depends(require_admin)):
     docs = await db.users.find({}, {"_id": 0, "user_id": 1, "email": 1, "name": 1, "role": 1, "picture": 1}).to_list(500)
@@ -1538,10 +1563,8 @@ async def current_week_key(user: User = Depends(require_admin_or_pm)):
     return {"week_key": wk, "label": dc_week_label(wk)}
 
 # ---------- Daily Chat Telegram reminder loop ----------
-DC_REMIND_HOURS_WIB = {9, 12, 15, 18, 21}
-
 async def daily_chat_reminder_loop():
-    """Send DC reminder at 09/12/15/18/21 WIB if there are active follow-ups."""
+    """Send DC reminder at configurable WIB hours if there are active follow-ups."""
     last_sent_hour: dict = {}  # date_str -> set of hours sent
     while True:
         try:
@@ -1551,6 +1574,7 @@ async def daily_chat_reminder_loop():
             token = settings_doc.get("dc_telegram_bot_token", "")
             chat_id = settings_doc.get("dc_telegram_chat_id", "")
             thread_id = settings_doc.get("dc_telegram_thread_id")
+            hours = set(settings_doc.get("dc_reminder_hours") or [9, 12, 15, 18, 21])
             if not token or not chat_id:
                 await asyncio.sleep(300); continue
 
@@ -1558,7 +1582,7 @@ async def daily_chat_reminder_loop():
             now_wib = datetime.now(timezone.utc) + timedelta(hours=7)
             hour = now_wib.hour
             date_str = now_wib.strftime("%Y-%m-%d")
-            if hour not in DC_REMIND_HOURS_WIB:
+            if hour not in hours:
                 await asyncio.sleep(300); continue
             sent_set = last_sent_hour.get(date_str, set())
             if hour in sent_set:
@@ -1568,52 +1592,50 @@ async def daily_chat_reminder_loop():
             wk = dc_week_key(date_str)
             chats = await db.daily_chats.find({"week_key": wk, "status": {"$in": list(DC_FOLLOWUP_STATUSES)}}, {"_id": 0}).to_list(500)
             if not chats:
-                # Don't send anything per spec, but mark sent for this hour to avoid spam
                 sent_set.add(hour); last_sent_hour[date_str] = sent_set
                 await asyncio.sleep(300); continue
 
-            by_account = {"Magsika": [], "Eirene": []}
-            for c in chats:
-                acct = c.get("account") or "Magsika"
-                if acct in by_account:
-                    by_account[acct].append(c)
-            groups_lines = []
-            total = 0
-            for acct in ["Magsika", "Eirene"]:
-                arr = by_account.get(acct) or []
-                if not arr:
-                    continue
-                groups_lines.append(f"━ {acct} ({len(arr)})")
-                for c in arr:
-                    groups_lines.append(f"  • {c.get('username') or '(no username)'} — {c.get('status')}")
-                groups_lines.append("")
-                total += len(arr)
-            groups_text = "\n".join(groups_lines).strip()
-            day_names = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-            tmpl = settings_doc.get("dc_template") or DC_DEFAULT_TEMPLATE
-            try:
-                msg = tmpl.format(
-                    day=day_names[now_wib.weekday()],
-                    date=now_wib.strftime("%d/%m/%Y"),
-                    time=now_wib.strftime("%H:%M"),
-                    groups=groups_text,
-                    total=total,
-                )
-            except Exception:
-                msg = DC_DEFAULT_TEMPLATE.format(
-                    day=day_names[now_wib.weekday()],
-                    date=now_wib.strftime("%d/%m/%Y"),
-                    time=now_wib.strftime("%H:%M"),
-                    groups=groups_text,
-                    total=total,
-                )
+            msg = build_dc_reminder_message(settings_doc, chats, now_wib)
             ok = send_telegram(token, chat_id, msg, thread_id)
             if ok:
                 sent_set.add(hour); last_sent_hour[date_str] = sent_set
-                logger.info(f"DC reminder sent at {hour}:00 WIB ({total} clients)")
+                logger.info(f"DC reminder sent at {hour}:00 WIB ({sum(1 for _ in chats)} clients)")
         except Exception as e:
             logger.exception(f"daily_chat_reminder_loop error: {e}")
         await asyncio.sleep(300)  # check every 5 minutes
+
+
+def build_dc_reminder_message(settings_doc: dict, chats: list, now_wib: datetime) -> str:
+    by_account = {"Magsika": [], "Eirene": []}
+    for c in chats:
+        acct = c.get("account") or "Magsika"
+        if acct in by_account:
+            by_account[acct].append(c)
+    groups_lines = []
+    total = 0
+    for acct in ["Magsika", "Eirene"]:
+        arr = by_account.get(acct) or []
+        if not arr:
+            continue
+        groups_lines.append(f"━ {acct} ({len(arr)})")
+        for c in arr:
+            groups_lines.append(f"  • {c.get('username') or '(no username)'} — {c.get('status')}")
+        groups_lines.append("")
+        total += len(arr)
+    groups_text = "\n".join(groups_lines).strip()
+    day_names = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+    tmpl = settings_doc.get("dc_template") or DC_DEFAULT_TEMPLATE
+    fmt_vars = dict(
+        day=day_names[now_wib.weekday()],
+        date=now_wib.strftime("%d/%m/%Y"),
+        time=now_wib.strftime("%H:%M"),
+        groups=groups_text,
+        total=total,
+    )
+    try:
+        return tmpl.format(**fmt_vars)
+    except Exception:
+        return DC_DEFAULT_TEMPLATE.format(**fmt_vars)
 
 # ---------- WebSocket ----------
 async def websocket_endpoint(ws: WebSocket):

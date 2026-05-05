@@ -11,24 +11,24 @@ const ROLE_COLORS = { admin: "#6d4cff", pm: "#0ea5e9", talent: "#f59e0b" };
 const NAV_BY_ROLE = {
   admin: [
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
+    { to: "/daily-chat", label: "Daily Chat", icon: MessageCircle, testid: "nav-daily-chat" },
     { to: "/orders", label: "Orders", icon: ClipboardList, testid: "nav-orders" },
     { to: "/board", label: "Board", icon: KanbanSquare, testid: "nav-board" },
     { to: "/todo", label: "To Do", icon: CheckSquare, testid: "nav-todo" },
     { to: "/performance", label: "Performance", icon: Award, testid: "nav-performance" },
     { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
     { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
-    { to: "/daily-chat", label: "Daily Chat", icon: MessageCircle, testid: "nav-daily-chat" },
     { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
   ],
   pm: [
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
+    { to: "/daily-chat", label: "Daily Chat", icon: MessageCircle, testid: "nav-daily-chat" },
     { to: "/orders", label: "Orders", icon: ClipboardList, testid: "nav-orders" },
     { to: "/board", label: "Board", icon: KanbanSquare, testid: "nav-board" },
     { to: "/todo", label: "To Do", icon: CheckSquare, testid: "nav-todo" },
     { to: "/performance", label: "Performance", icon: Award, testid: "nav-performance" },
     { to: "/invoice", label: "Invoice", icon: Receipt, testid: "nav-invoice" },
     { to: "/earning", label: "Earning", icon: TrendingUp, testid: "nav-earning" },
-    { to: "/daily-chat", label: "Daily Chat", icon: MessageCircle, testid: "nav-daily-chat" },
     { to: "/freelance", label: "Freelance", icon: Palette, testid: "nav-freelance" },
   ],
   talent: [

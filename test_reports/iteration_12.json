@@ -1,0 +1,34 @@
+{
+  "summary": "Iter 12 — Daily Chat refinements e2e testing. Backend pytest 5/5 PASS: (1) GET /api/settings returns dc_reminder_hours List[int] (default [9,12,15,18,21] or persisted), (2) PUT /api/settings roundtrips dc_reminder_hours=[10,14,20] via PUT response body AND subsequent GET, (3) POST /api/settings/test-dc-telegram with empty dc_telegram_bot_token returns 400 'Daily Chat Telegram belum dikonfigurasi', (4) POST /api/settings/test-dc-telegram with fake creds returns 400 'Gagal kirim pesan test' (telegram API rejects), (5) talent user gets 403 on the test-dc-telegram endpoint. Frontend Playwright: admin login OK; nav order confirmed = Dashboard→DailyChat→Orders→Board→ToDo→Performance→Invoice→Earning→Freelance with nav-dashboard immediately before nav-daily-chat and nav-orders immediately after; /daily-chat page loads; dc-month-filter present with current month (2026-05); week-chip-2026-05-W1..W5 all 5 chips rendered; stat-discussing click sets status-filter→'Discussing' AND adds ring/active class, 2nd click reverts to 'all'; stat-place click sets 'Place Order'; stat-followup click sets 'Follow Up' (just FU, not nego); stat-total + stat-conv are DIV (not BUTTON) with cursor=auto (non-clickable confirmed), while stat-discussing is a BUTTON; auto-fill verified: add row → fill row-agreed with '100' + blur → row-real displays '80' AND backend GET /api/daily-chats returns that row with agreed=100 real=80; Settings page: test-dc-telegram-btn present, dc-reminder-hours-input defaults to '9, 12, 15, 18, 21', changing to '10, 14, 20' + save + reload persists as '10, 14, 20'. All spec behaviors pass. No blocking bugs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter12.py",
+    "/app/test_reports/pytest/iter12_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "DailyChat.jsx L227: Follow Up StatCard uses active={statusFilter === 'Follow Up'} but onClick passes 'follow_nego' which toggleStatusFilter maps internally to 'Follow Up'. Works correctly but the indirection is confusing — consider passing 'Follow Up' directly and deleting the 'follow_nego' special case (the comment at L148 even says 'easiest: cycle Follow Up only'). Minor cleanup.",
+    "Settings.jsx main save button at L264 'Simpan Settings' has no data-testid — add data-testid='settings-save-btn' for robust automation (my test fell back to button:has-text('Simpan') which is less stable).",
+    "server.py L1319-1340 test_dc_telegram endpoint: correctly raises 400 for missing creds AND for telegram failure. Using fallback sample chats when DB empty is a nice UX touch for preview. No issues.",
+    "server.py L1577: hours = set(settings_doc.get('dc_reminder_hours') or [9,12,15,18,21]) — uses `or` so empty list falls back to default. If user explicitly wants to disable reminders they should toggle dc_reminders_enabled=false instead — acceptable (L1576 likely checks this). No bug but worth documenting.",
+    "DailyChat.jsx patchChat L163: computedReal = Math.round(agreedVal * 0.8 * 100) / 100 — allows 2-decimal precision (e.g., 10 → 8.00); for agreed=100 produces exactly 80, confirmed. For fractional agreed like 99 → 79.2, which is displayed correctly in NumInput. No issue.",
+    "WebSocket /api/ws still returns 403 in preview env (pre-existing, flagged in iter 11) — non-blocking, real-time updates won't work in preview but HTTP API + polling work fine."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter12.py",
+    "/app/test_reports/pytest/iter12_results.xml",
+    "/app/test_reports/iteration_12.json"
+  ],
+  "success_rate": {"backend": "100% (5/5 pytest)", "frontend": "100% on all 13 spec behaviors"},
+  "test_credentials": "Admin: magsikastudio@gmail.com / MagsikaAdmin123! (from /app/memory/test_credentials.md). Talent (transient): tdc.iter12.<ts>@iter12test.com / tdc12345 — created via /api/auth/invite, deleted after RBAC test.",
+  "seed_data_creation": "Test data created/cleaned: TEST_ daily_chat rows (not used — only ephemeral 'iter12_autofill' row from playwright, deleted). Settings dc_reminder_hours / dc_telegram_bot_token / dc_telegram_chat_id written during test and restored to original values after.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter 12 Daily Chat refinements fully validated: backend settings contract (dc_reminder_hours List[int], test-dc-telegram endpoint 400 on missing+failure, admin-only RBAC) and frontend (nav reorder adjacency, month filter, W1-W5 chips, clickable stat cards with toggle+ring active state, stat-total/conv non-clickable, auto-fill real=0.8*agreed on blur persisted to backend, settings hours input persist+reload). test_iter12.py is the regression file. Test-DC-Telegram endpoint was not exercised end-to-end with REAL telegram (fake creds path returns 400 'Gagal kirim pesan test', which is the expected behavior per spec). Real telegram delivery needs manual smoke by main agent with valid bot/chat. Minor code cleanup suggestions in critical_code_review_comments — non-blocking.",
+  "rca of the issue": "N/A — all iter 12 spec behaviors pass. No functional bugs."
+}
