@@ -7,6 +7,7 @@ import logging
 import uuid
 import asyncio
 import re
+import certifi
 import requests
 import bcrypt
 import secrets
@@ -22,7 +23,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(
+    mongo_url,
+    tlsCAFile=certifi.where()
+)
 db = client[os.environ['DB_NAME']]
 
 app = FastAPI()
